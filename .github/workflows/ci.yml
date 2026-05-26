@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/job_complaint
+      JWT_SECRET: ci-jwt-secret
+      JWT_EXPIRES_IN: 1d
+      OPENROUTER_API_KEY: ""
+      OPENROUTER_MODEL: openai/gpt-4o-mini
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: job_complaint
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d job_complaint"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Push database schema
+        run: npx prisma db push
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Start app for operational smoke
+        run: |
+          npm run start -- -p 3000 > /tmp/jobcomplaint-start.log 2>&1 &
+          echo $! > /tmp/jobcomplaint.pid
+
+      - name: Wait for app startup
+        run: |
+          for i in {1..30}; do
+            if curl -sf http://localhost:3000/api/ops/health >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "App failed to become ready"
+          cat /tmp/jobcomplaint-start.log
+          exit 1
+
+      - name: Operational smoke
+        run: SMOKE_BASE_URL=http://localhost:3000 npm run ops:smoke
+
+      - name: Stop app
+        if: always()
+        run: |
+          if [ -f /tmp/jobcomplaint.pid ]; then
+            kill "$(cat /tmp/jobcomplaint.pid)" || true
+          fi

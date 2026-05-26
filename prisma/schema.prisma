@@ -1,0 +1,538 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  ADMIN
+  INVESTIGATOR
+  VIEWER
+}
+
+enum CaseStatus {
+  OPEN
+  IN_REVIEW
+  WAITING_RESPONSE
+  ESCALATED
+  AWAITING_COMMITTEE_APPROVAL
+  RESOLVED
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  CRITICAL
+}
+
+enum MessageAuthor {
+  WHISTLEBLOWER
+  COUNCIL
+  SYSTEM
+}
+
+enum PlanCode {
+  STARTER
+  BUSINESS
+  ENTERPRISE
+}
+
+enum DataSubjectRequestType {
+  ACCESS
+  CORRECTION
+  ANONYMIZATION
+  DELETION
+  PORTABILITY
+  INFORMATION
+}
+
+enum DataSubjectRequestStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  REJECTED
+}
+
+enum ParticipantRole {
+  WITNESS
+  COLLABORATOR
+}
+
+enum InviteStatus {
+  PENDING
+  SENT
+  ACCEPTED
+  REVOKED
+  EXPIRED
+}
+
+enum CommitteeDecision {
+  APPROVE
+  REJECT
+}
+
+enum PipelineAction {
+  STORE_RAW_REPORT
+  TRIAGE_A_GUARD
+  TRIAGE_B_CLASSIFY
+  EVALUATE_REPORT_OBJECT
+  NOTIFY_CONTACTS
+  INIT_WHISTLEBLOWER_COMMUNICATION
+  REVIEW_ITERATION
+  PREPARE_PRE_CONCLUSION
+  ENGAGEMENT_TICK
+  ENTITY_REINFERENCE
+}
+
+enum OutboxStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  DEAD
+}
+
+enum PipelineStage {
+  RECEIVED
+  STORED
+  TRIAGE_A_COMPLETED
+  TRIAGE_B_COMPLETED
+  EVALUATED
+  CONTACTS_NOTIFIED
+  COMMUNICATION_INITIALIZED
+  REVIEW_IN_PROGRESS
+  REVIEW_CONCLUDED
+  PRE_CONCLUSION_READY
+  CONCLUDED
+}
+
+enum DisclosureLevel {
+  ROLE_ONLY
+  PSEUDONYM
+  FULL_NAME
+}
+
+enum WhistleblowerInteractionStatus {
+  ANALYZING
+  PROCESSING_YOUR_MESSAGE
+  AWAITING_YOUR_REPLY
+  AWAITING_PARTICIPANTS
+  SYNTHESIZING
+  PRE_CONCLUSION
+  CONCLUDED
+}
+
+enum EngagementStepType {
+  REVIEW_CYCLE
+  PARTICIPANT_FOLLOWUP
+  STATUS_UPDATE
+  PRE_CONCLUSION_CHECK
+}
+
+enum EngagementStepStatus {
+  PLANNED
+  SCHEDULED
+  COMPLETED
+  SKIPPED
+  FAILED
+}
+
+model User {
+  id          String       @id @default(cuid())
+  tenantId    String
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  email       String
+  password    String
+  role        UserRole     @default(VIEWER)
+  companyRole String      @default("Membro do Conselho")
+  isCorporateAccount Boolean @default(false)
+  isActive    Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  auditEvents AuditEvent[]
+  escalatedCases Case[]    @relation("EscalatedCases")
+  committeeDecisions CaseCommitteeDecision[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@index([tenantId, isCorporateAccount, isActive])
+}
+
+model Tenant {
+  id         String                    @id @default(cuid())
+  name       String
+  code       String                    @unique
+  planCode   PlanCode                  @default(STARTER)
+  seatLimit  Int                       @default(200)
+  aiMonthlyLimit Int                   @default(2000)
+  billingEmail String?
+  websiteUrl String?
+  onboardingCompletedAt DateTime?
+  createdAt  DateTime                  @default(now())
+  updatedAt  DateTime                  @updatedAt
+  users      User[]
+  cases      Case[]
+  tokens     WhistleblowerAccessToken[]
+  messages   CaseMessage[]
+  auditEvents AuditEvent[]
+  dataSubjectRequests DataSubjectRequest[]
+  caseParticipants CaseParticipant[]
+  caseInviteTokens CaseInviteToken[]
+  participantResponses ParticipantResponse[]
+  caseCommitteeDecisions CaseCommitteeDecision[]
+  rawReports RawReport[]
+  outboxMessages OutboxMessage[]
+  pipelineStates CasePipelineState[]
+  reviewIterations CaseReviewIteration[]
+  implicatedPeople CaseImplicatedPerson[]
+  engagementPlans CaseEngagementPlan[]
+  engagementSteps CaseEngagementStep[]
+
+  @@index([planCode])
+}
+
+model Case {
+  id          String                    @id @default(cuid())
+  tenantId    String
+  tenant      Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  externalId  String                    @unique
+  title       String
+  description String
+  category    String
+  status      CaseStatus                @default(OPEN)
+  risk        RiskLevel                 @default(MEDIUM)
+  restrictedUserIds String[]            @default([])
+  firstResponseDueAt DateTime?
+  resolutionDueAt DateTime?
+  escalatedToUserId String?
+  escalatedToUser User?                 @relation("EscalatedCases", fields: [escalatedToUserId], references: [id], onDelete: SetNull)
+  createdAt   DateTime                  @default(now())
+  updatedAt   DateTime                  @updatedAt
+  openedAt    DateTime                  @default(now())
+  token       WhistleblowerAccessToken?
+  messages    CaseMessage[]
+  auditEvents AuditEvent[]
+  participants CaseParticipant[]
+  participantResponses ParticipantResponse[]
+  committeeDecisions CaseCommitteeDecision[]
+  triageSummary Json?
+  investigationSummary Json?
+  investigationCompletedAt DateTime?
+  committeeDecisionStartedAt DateTime?
+  intakeCompletedAt DateTime?
+  reviewConcludedAt DateTime?
+  readyForCommitteeAt DateTime?
+  preConclusionPackage Json?
+  closedAt DateTime?
+  rawReport RawReport?
+  pipelineState CasePipelineState?
+  outboxMessages OutboxMessage[]
+  reviewIterations CaseReviewIteration[]
+  implicatedPeople CaseImplicatedPerson[]
+  engagementPlans CaseEngagementPlan[]
+  engagementSteps CaseEngagementStep[]
+
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@index([tenantId, status])
+}
+
+model RawReport {
+  id           String   @id @default(cuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  caseId       String   @unique
+  case         Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  narrativeEncrypted String
+  conversationEncrypted String?
+  attachmentsPayload Json?
+  intakePayload Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  outboxMessages OutboxMessage[]
+
+  @@index([tenantId, createdAt(sort: Desc)])
+}
+
+model OutboxMessage {
+  id             String         @id @default(cuid())
+  tenantId       String
+  tenant         Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  caseId         String?
+  case           Case?          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  rawReportId    String?
+  rawReport      RawReport?     @relation(fields: [rawReportId], references: [id], onDelete: Cascade)
+  engagementStepId String?
+  engagementStep   CaseEngagementStep? @relation(fields: [engagementStepId], references: [id], onDelete: SetNull)
+  action         PipelineAction
+  status         OutboxStatus   @default(PENDING)
+  attempts       Int            @default(0)
+  payload        Json?
+  idempotencyKey String?
+  lastError      String?
+  availableAt    DateTime       @default(now())
+  lockedAt       DateTime?
+  processedAt    DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([tenantId, status, availableAt])
+  @@index([tenantId, caseId, createdAt(sort: Desc)])
+  @@index([tenantId, action, createdAt(sort: Desc)])
+}
+
+model CasePipelineState {
+  id                   String         @id @default(cuid())
+  tenantId             String
+  tenant               Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  caseId               String         @unique
+  case                 Case           @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  currentStage         PipelineStage  @default(RECEIVED)
+  latestAction         PipelineAction?
+  latestActionStatus   OutboxStatus   @default(PENDING)
+  whistleblowerStatus  WhistleblowerInteractionStatus @default(ANALYZING)
+  reviewIterationCount Int            @default(0)
+  pendingQuestion      String?
+  latestConsistencyScore Float?
+  nextContactAt        DateTime?
+  processingSince      DateTime?
+  lastOutboundAt       DateTime?
+  guardAssessment      Json?
+  evaluationObject     Json?
+  lastError            String?
+  startedAt            DateTime       @default(now())
+  lastTransitionAt     DateTime       @default(now())
+  completedAt          DateTime?
+
+  @@index([tenantId, currentStage])
+}
+
+model CaseEngagementPlan {
+  id                String   @id @default(cuid())
+  tenantId          String
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  caseId            String
+  case              Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  version           Int      @default(1)
+  templateName      String   @default("ADAPTIVE_2_WEEKS")
+  isActive          Boolean  @default(true)
+  startedAt         DateTime @default(now())
+  targetConclusionAt DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  steps             CaseEngagementStep[]
+
+  @@index([tenantId, caseId, createdAt(sort: Desc)])
+}
+
+model CaseEngagementStep {
+  id                String               @id @default(cuid())
+  tenantId          String
+  tenant            Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  caseId            String
+  case              Case                 @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  engagementPlanId  String
+  engagementPlan    CaseEngagementPlan   @relation(fields: [engagementPlanId], references: [id], onDelete: Cascade)
+  stepType          EngagementStepType
+  status            EngagementStepStatus @default(PLANNED)
+  sequence          Int
+  scheduledAt       DateTime
+  completedAt       DateTime?
+  payload           Json?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  outboxMessages    OutboxMessage[]
+
+  @@index([tenantId, caseId, scheduledAt])
+  @@index([tenantId, engagementPlanId, sequence])
+}
+
+model CaseReviewIteration {
+  id               String   @id @default(cuid())
+  tenantId         String
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  caseId           String
+  case             Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  sourceMessageId  String?
+  iterationNumber  Int
+  guardAssessment  Json?
+  consistencyScore Float?
+  isConclusive     Boolean  @default(false)
+  recommendedAction String?
+  nextQuestions    Json?
+  inferredPeople   Json?
+  potentialBlockedMentions Json?
+  confidence       String?
+  aiProvider       String?
+  aiModel          String?
+  aiUsage          Json?
+  summary          String?
+  createdAt        DateTime @default(now())
+
+  @@index([tenantId, caseId, createdAt(sort: Desc)])
+}
+
+model CaseImplicatedPerson {
+  id                    String          @id @default(cuid())
+  tenantId              String
+  tenant                Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  caseId                String
+  case                  Case            @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  linkedUserId          String?
+  displayNameEncrypted  String
+  roleHint              String?
+  source                String
+  disclosureLevel       DisclosureLevel @default(ROLE_ONLY)
+  disclosedAt           DateTime?
+  disclosedByUserId     String?
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  @@index([tenantId, caseId, createdAt(sort: Desc)])
+}
+
+model CaseParticipant {
+  id             String          @id @default(cuid())
+  tenantId       String
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  caseId         String
+  case           Case            @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  role           ParticipantRole @default(WITNESS)
+  emailHash      String
+  emailEncrypted String
+  inviteStatus   InviteStatus    @default(PENDING)
+  acceptedAt     DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  inviteTokens   CaseInviteToken[]
+  responses      ParticipantResponse[]
+
+  @@index([tenantId, caseId, createdAt(sort: Desc)])
+  @@index([tenantId, emailHash])
+}
+
+model CaseInviteToken {
+  id                String          @id @default(cuid())
+  tenantId          String
+  tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  caseParticipantId String
+  caseParticipant   CaseParticipant @relation(fields: [caseParticipantId], references: [id], onDelete: Cascade)
+  tokenHash         String          @unique
+  expiresAt         DateTime
+  consumedAt        DateTime?
+  revokedAt         DateTime?
+  createdAt         DateTime        @default(now())
+
+  @@index([tenantId, expiresAt])
+  @@index([tenantId, caseParticipantId, createdAt(sort: Desc)])
+}
+
+model ParticipantResponse {
+  id                String          @id @default(cuid())
+  tenantId          String
+  tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  caseId            String
+  case              Case            @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  caseParticipantId String
+  caseParticipant   CaseParticipant @relation(fields: [caseParticipantId], references: [id], onDelete: Cascade)
+  questionText      String
+  answerText        String
+  createdAt         DateTime        @default(now())
+
+  @@index([tenantId, caseId, createdAt(sort: Desc)])
+  @@index([tenantId, caseParticipantId, createdAt(sort: Desc)])
+}
+
+model CaseCommitteeDecision {
+  id         String            @id @default(cuid())
+  tenantId   String
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  caseId     String
+  case       Case              @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  decision   CommitteeDecision
+  comment    String?
+  createdAt  DateTime          @default(now())
+
+  @@unique([caseId, userId])
+  @@index([tenantId, caseId, createdAt(sort: Desc)])
+}
+
+model WhistleblowerAccessToken {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  caseId      String   @unique
+  case        Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  tokenHash   String   @unique
+  lastAccessAt DateTime?
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime?
+
+  @@index([tenantId])
+}
+
+model CaseMessage {
+  id         String        @id @default(cuid())
+  tenantId   String
+  tenant     Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  caseId     String
+  case       Case          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  authorType MessageAuthor
+  content    String
+  createdAt  DateTime      @default(now())
+
+  @@index([tenantId, caseId, createdAt])
+}
+
+model AuditEvent {
+  id             String    @id @default(cuid())
+  tenantId       String
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  caseId         String?
+  case           Case?     @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  actorUserId    String?
+  actorUser      User?     @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  action         String
+  metadata       Json?
+  immutableData  Json?
+  eventIndex     Int?
+  previousHash   String?
+  eventHash      String?
+  occurredAt     DateTime  @default(now())
+  createdAt      DateTime  @default(now())
+
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@index([tenantId, caseId, createdAt(sort: Desc)])
+  @@index([tenantId, caseId, eventIndex(sort: Desc)])
+  @@index([tenantId, eventHash])
+}
+
+model DataSubjectRequest {
+  id          String                   @id @default(cuid())
+  tenantId    String?
+  tenant      Tenant?                  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  requestType DataSubjectRequestType
+  status      DataSubjectRequestStatus @default(OPEN)
+  requesterName String
+  requesterEmail String
+  requesterDocumentHash String?
+  details     String
+  legalConsent Boolean                 @default(false)
+  dueAt       DateTime?
+  slaBreachedAt DateTime?
+  createdAt   DateTime                 @default(now())
+  updatedAt   DateTime                 @updatedAt
+  resolvedAt  DateTime?
+
+  @@index([tenantId, status, createdAt(sort: Desc)])
+  @@index([requesterEmail, createdAt(sort: Desc)])
+}
