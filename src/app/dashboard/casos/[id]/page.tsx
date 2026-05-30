@@ -24,6 +24,7 @@ type CaseDetail = {
   description: string
   category: string
   status: string
+  abandonedBySilence?: boolean
   risk: "Crítico" | "Médio" | "Baixo" | "Sigiloso"
   createdAt: string
   updatedAt: string
@@ -80,6 +81,15 @@ export default function CaseInvestigationPage() {
       visibleName: string
       roleHint: string | null
       disclosureLevel: string
+      mentionCount: number
+      firstMentionedAt: string
+      lastMentionedAt: string
+      involvement: {
+        totalMentions: number
+        caseCount: number
+        recentCaseExternalIds: string[]
+        lastMentionedAt: string
+      }
     }>
   } | null>(null)
 
@@ -219,6 +229,11 @@ export default function CaseInvestigationPage() {
               {caseData.risk}
             </Badge>
             <Badge variant="outline" className="text-xs">{caseData.status}</Badge>
+            {caseData.abandonedBySilence ? (
+              <Badge className="text-xs bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20">
+                Encaminhado por abandono
+              </Badge>
+            ) : null}
           </div>
           <h1 className="text-xl font-bold tracking-tight">{caseData.category}</h1>
           <p className="text-sm text-muted-foreground mt-1">
@@ -350,6 +365,19 @@ export default function CaseInvestigationPage() {
                         <p className="text-xs text-muted-foreground">
                           {person.roleHint || "Sem papel declarado"} · {person.disclosureLevel}
                         </p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Menções neste caso: {person.mentionCount} · Última menção:{" "}
+                          {new Date(person.lastMentionedAt).toLocaleString("pt-BR")}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Envolvimento geral: {person.involvement.caseCount} caso(s),{" "}
+                          {person.involvement.totalMentions} menções.
+                        </p>
+                        {person.involvement.caseCount > 1 ? (
+                          <p className="text-[11px] text-muted-foreground mt-1">
+                            Casos relacionados: {person.involvement.recentCaseExternalIds.join(", ")}
+                          </p>
+                        ) : null}
                       </div>
                     ))}
                   </div>

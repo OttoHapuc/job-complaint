@@ -14,6 +14,7 @@ type DashboardCase = {
   risk: RiskLevel
   lastInteraction: string
   status: string
+  abandonedBySilence?: boolean
   escalatedTo?: string | null
 }
 
@@ -62,6 +63,7 @@ export default function CasosPage() {
   const [cases, setCases] = useState<DashboardCase[]>([])
   const [search, setSearch] = useState("")
   const [filterRisk, setFilterRisk] = useState<"all" | RiskLevel>("all")
+  const [filterFlow, setFilterFlow] = useState<"all" | "abandoned">("all")
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState("")
 
@@ -109,9 +111,10 @@ export default function CasosPage() {
         c.externalId.toLowerCase().includes(search.toLowerCase()) ||
         c.category.toLowerCase().includes(search.toLowerCase())
       const matchRisk = filterRisk === "all" || c.risk === filterRisk
-      return matchSearch && matchRisk
+      const matchFlow = filterFlow === "all" || Boolean(c.abandonedBySilence)
+      return matchSearch && matchRisk && matchFlow
     })
-  }, [cases, search, filterRisk])
+  }, [cases, search, filterRisk, filterFlow])
 
   return (
     <div className="px-6 py-8 space-y-6">
@@ -145,6 +148,23 @@ export default function CasosPage() {
               }`}
             >
               {level === "all" ? "Todos" : level}
+            </button>
+          ))}
+          <div className="mx-1 h-5 w-px bg-border" />
+          {([
+            { id: "all", label: "Todos fluxos" },
+            { id: "abandoned", label: "Abandonados" },
+          ] as const).map((flow) => (
+            <button
+              key={flow.id}
+              onClick={() => setFilterFlow(flow.id)}
+              className={`px-3 py-2 text-xs font-medium border rounded-sm transition-colors ${
+                filterFlow === flow.id
+                  ? "bg-foreground text-background border-foreground"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {flow.label}
             </button>
           ))}
         </div>
@@ -183,6 +203,11 @@ export default function CasosPage() {
                 <span className="text-sm text-muted-foreground font-mono">{c.lastInteraction}</span>
                 <div className="flex flex-col gap-1">
                   <StatusBadge status={c.status} />
+                  {c.abandonedBySilence ? (
+                    <span className="text-[10px] text-amber-700 dark:text-amber-300">
+                      Encaminhado por ausência de resposta
+                    </span>
+                  ) : null}
                   {c.status === "Escalonado" && c.escalatedTo ? (
                     <span className="text-[10px] text-muted-foreground">Responsável: {c.escalatedTo}</span>
                   ) : null}

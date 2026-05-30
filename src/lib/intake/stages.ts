@@ -447,6 +447,10 @@ async function stageTriageBClassify(context: Context) {
           model: triage.model,
           usage: triage.usage,
           fallbackUsed: triage.fallbackUsed,
+          sanitizedNarrative: triage.sanitizedNarrative,
+          narrativeForCouncil: triage.narrativeForCouncil,
+          sanitizationMode: triage.sanitizationMode,
+          sanitizationReason: triage.sanitizationReason,
           conflictSignals: triage.conflictSignals,
           autoBlockedUserNames: triage.autoBlockedUserNames,
           recommendedCouncilBrief: triage.recommendedCouncilBrief,
@@ -562,6 +566,10 @@ async function stageEvaluateReportObject(context: Context) {
   ]);
 
   const triageSummary = reportCase.triageSummary as Record<string, unknown> | null;
+  const narrativeForCouncil =
+    typeof triageSummary?.narrativeForCouncil === "string"
+      ? triageSummary.narrativeForCouncil
+      : getNarrative(raw);
   const conflictSignals = Array.isArray(triageSummary?.conflictSignals)
     ? (triageSummary?.conflictSignals as string[])
     : [];
@@ -612,7 +620,7 @@ async function stageEvaluateReportObject(context: Context) {
     await tx.case.update({
       where: { id: context.caseId },
       data: {
-        description: encryptSensitiveText(getNarrative(raw)),
+        description: encryptSensitiveText(narrativeForCouncil),
         restrictedUserIds: finalBlockedMemberIds,
         firstResponseDueAt,
         resolutionDueAt,
@@ -678,10 +686,18 @@ async function stageEvaluateReportObject(context: Context) {
         data: {
           tenantId: context.tenantId,
           caseId: context.caseId,
-          displayNameEncrypted: encryptSensitiveText(corroborator?.name?.trim() || "Pessoa citada"),
+          displayNameEncrypted: encryptSensitiveText(
+            corroborator?.name?.trim() || "Pessoa citada",
+          ),
+          displayNameHash: hashSensitiveValue(
+            corroborator?.name?.trim() || "pessoa citada",
+          ),
           roleHint: "Pessoa citada no relato",
           source: "WHISTLEBLOWER",
           disclosureLevel: "ROLE_ONLY",
+          mentionCount: 1,
+          firstMentionedAt: new Date(),
+          lastMentionedAt: new Date(),
         },
       });
       await createImmutableAuditEvent(tx, {
@@ -1048,7 +1064,11 @@ async function stageReviewIteration(context: Context) {
           caseId: context.caseId,
         },
         select: {
+          id: true,
+          displayNameHash: true,
           displayNameEncrypted: true,
+          mentionCount: true,
+          roleHint: true,
         },
       });
       const existingNames = new Set(
@@ -1056,21 +1076,84 @@ async function stageReviewIteration(context: Context) {
           decryptSensitiveText(item.displayNameEncrypted).toLowerCase(),
         ),
       );
+      const existingByHash = new Map(
+        existingImplicated.map((item) => [item.displayNameHash, item]),
+      );
       for (const person of reviewResult.inferredPeople) {
         const personName = person.trim();
         if (!personName) continue;
-        if (existingNames.has(personName.toLowerCase())) continue;
         const nameHash = hashSensitiveValue(personName);
-        await tx.caseImplicatedPerson.create({
+        const existingByName = existingNames.has(personName.toLowerCase());
+        const existing = existingByHash.get(nameHash);
+        if (existing || existingByName) {
+          const target = existing
+            ? existing
+            : existingImplicated.find(
+                (item) =>
+                  decryptSensitiveText(item.displayNameEncrypted).toLowerCase() ===
+                  personName.toLowerCase(),
+              );
+          if (target) {
+            const updated = await tx.caseImplicatedPerson.update({
+              where: { id: target.id },
+              data: {
+                mentionCount: { increment: 1 },
+                lastMentionedAt: new Date(),
+                roleHint: target.roleHint || "Detectado durante diálogo investigativo",
+              },
+              select: {
+                mentionCount: true,
+                displayNameHash: true,
+              },
+            });
+            await createImmutableAuditEvent(tx, {
+              tenantId: context.tenantId,
+              caseId: context.caseId,
+              action: "CASE_IMPLICATED_PERSON_REINFORCED",
+              payload: {
+                personHashPrefix: updated.displayNameHash.slice(0, 12),
+                mentionCount: updated.mentionCount,
+              },
+            });
+          }
+          continue;
+        }
+        const created = await tx.caseImplicatedPerson.create({
           data: {
             tenantId: context.tenantId,
             caseId: context.caseId,
             displayNameEncrypted: encryptSensitiveText(personName),
+            displayNameHash: nameHash,
             roleHint: "Detectado durante diálogo investigativo",
             source: `AI_REVIEW_${nameHash.slice(0, 10)}`,
             disclosureLevel: "ROLE_ONLY",
+            mentionCount: 1,
+            firstMentionedAt: new Date(),
+            lastMentionedAt: new Date(),
+          },
+          select: {
+            id: true,
+            displayNameHash: true,
           },
         });
+        await createImmutableAuditEvent(tx, {
+          tenantId: context.tenantId,
+          caseId: context.caseId,
+          action: "CASE_IMPLICATED_PERSON_ADDED",
+          payload: {
+            implicatedId: created.id,
+            source: "AI_REVIEW",
+            personHashPrefix: created.displayNameHash.slice(0, 12),
+          },
+        });
+        existingByHash.set(created.displayNameHash, {
+          id: created.id,
+          displayNameHash: created.displayNameHash,
+          displayNameEncrypted: encryptSensitiveText(personName),
+          mentionCount: 1,
+          roleHint: "Detectado durante diálogo investigativo",
+        });
+        existingNames.add(personName.toLowerCase());
       }
     }
     if (blockedByMention.length > 0) {
@@ -1204,16 +1287,114 @@ async function stageEngagementTick(context: Context) {
     select: {
       id: true,
       status: true,
+      reviewConcludedAt: true,
       pipelineState: {
         select: {
           pendingQuestion: true,
           whistleblowerStatus: true,
+          lastOutboundAt: true,
         },
       },
     },
   });
   if (!reportCase) throw new Error("Caso não encontrado para tick de engajamento.");
   if (reportCase.status === "RESOLVED") return;
+  const [latestWhistleblowerMessage, activePlan] = await Promise.all([
+    prisma.caseMessage.findFirst({
+      where: {
+        caseId: context.caseId,
+        authorType: "WHISTLEBLOWER",
+      },
+      orderBy: { createdAt: "desc" },
+      select: {
+        createdAt: true,
+      },
+    }),
+    prisma.caseEngagementPlan.findFirst({
+      where: {
+        tenantId: context.tenantId,
+        caseId: context.caseId,
+        isActive: true,
+      },
+      orderBy: { createdAt: "desc" },
+      select: {
+        targetConclusionAt: true,
+        startedAt: true,
+      },
+    }),
+  ]);
+
+  const inactivityReference = (() => {
+    const lastOutboundAt = reportCase.pipelineState?.lastOutboundAt;
+    if (lastOutboundAt) return lastOutboundAt;
+    if (latestWhistleblowerMessage?.createdAt) return latestWhistleblowerMessage.createdAt;
+    return activePlan?.startedAt ?? new Date();
+  })();
+  const inactivityThresholdMs =
+    SECURITY_CONFIG.abandonmentWindowDays * 24 * 60 * 60 * 1000;
+  const exceededByInactivity =
+    Date.now() - inactivityReference.getTime() >= inactivityThresholdMs;
+  const exceededByPlanDeadline =
+    activePlan?.targetConclusionAt != null &&
+    Date.now() >= activePlan.targetConclusionAt.getTime();
+  const shouldAutoAdvanceByAbandonment =
+    Boolean(reportCase.pipelineState?.pendingQuestion) &&
+    (exceededByInactivity || exceededByPlanDeadline);
+
+  if (shouldAutoAdvanceByAbandonment) {
+    await prisma.$transaction(async (tx) => {
+      await tx.case.update({
+        where: { id: context.caseId },
+        data: {
+          status: "IN_REVIEW",
+          reviewConcludedAt: reportCase.reviewConcludedAt ?? new Date(),
+        },
+      });
+      await createImmutableAuditEvent(tx, {
+        tenantId: context.tenantId,
+        caseId: context.caseId,
+        action: "CASE_ABANDONMENT_THRESHOLD_REACHED",
+        payload: {
+          abandonmentWindowDays: SECURITY_CONFIG.abandonmentWindowDays,
+          inactivityReferenceAt: inactivityReference.toISOString(),
+          targetConclusionAt: activePlan?.targetConclusionAt?.toISOString() ?? null,
+        },
+      });
+      await tx.caseMessage.create({
+        data: {
+          tenantId: context.tenantId,
+          caseId: context.caseId,
+          authorType: "SYSTEM",
+          content: encryptSensitiveText(
+            "Não recebemos novas respostas dentro da janela planejada de acompanhamento. O caso seguirá para pre-conclusão com os dados disponíveis até aqui.",
+          ),
+        },
+      });
+      await enqueueOutboxAction(tx, {
+        tenantId: context.tenantId,
+        caseId: context.caseId,
+        rawReportId: context.rawReportId,
+        action: PipelineAction.PREPARE_PRE_CONCLUSION,
+        payload: {
+          origin: "abandonment-threshold",
+        },
+        idempotencyKey: `${context.caseId}:prepare-pre-conclusion:abandonment`,
+      });
+      await updatePipelineState(tx, {
+        caseId: context.caseId,
+        stage: PipelineStage.REVIEW_CONCLUDED,
+        action: PipelineAction.ENGAGEMENT_TICK,
+        status: "COMPLETED",
+        pendingQuestion: null,
+        whistleblowerStatus: WhistleblowerInteractionStatus.SYNTHESIZING,
+        processingSince: null,
+        nextContactAt: null,
+        lastOutboundAt: new Date(),
+      });
+    });
+    return;
+  }
+
   const reminderMessage = reportCase.pipelineState?.pendingQuestion
     ? "Seguimos analisando seu caso com cautela. Quando puder, responda a pergunta pendente para avançarmos na investigação."
     : "Seu caso segue em análise pelo Agente de Investigação. Você receberá atualização em breve.";
@@ -1245,6 +1426,25 @@ async function stageEngagementTick(context: Context) {
         : WhistleblowerInteractionStatus.ANALYZING,
       lastOutboundAt: new Date(),
       nextContactAt: null,
+    });
+    const nextTickAt = await scheduleNextEngagementTick({
+      tx,
+      tenantId: context.tenantId,
+      caseId: context.caseId,
+      rawReportId: context.rawReportId,
+      baseDate: new Date(),
+      reason: "FOLLOWUP_REMINDER_LOOP",
+    });
+    await updatePipelineState(tx, {
+      caseId: context.caseId,
+      stage: PipelineStage.REVIEW_IN_PROGRESS,
+      action: PipelineAction.ENGAGEMENT_TICK,
+      status: "COMPLETED",
+      whistleblowerStatus: reportCase.pipelineState?.pendingQuestion
+        ? WhistleblowerInteractionStatus.AWAITING_YOUR_REPLY
+        : WhistleblowerInteractionStatus.ANALYZING,
+      lastOutboundAt: new Date(),
+      nextContactAt: nextTickAt,
     });
   });
 }

@@ -116,6 +116,21 @@ export async function GET(request: NextRequest) {
       },
     }),
   ]);
+  const recentCaseIds = recentCases.map((item) => item.id);
+  const abandonmentEvents =
+    recentCaseIds.length === 0
+      ? []
+      : await prisma.auditEvent.findMany({
+          where: {
+            tenantId,
+            caseId: { in: recentCaseIds },
+            action: "CASE_ABANDONMENT_THRESHOLD_REACHED",
+          },
+          select: {
+            caseId: true,
+          },
+        });
+  const abandonedCaseIds = new Set(abandonmentEvents.map((item) => item.caseId));
 
   await prisma.$transaction(async (tx) => {
     await createImmutableAuditEvent(tx, {
@@ -148,6 +163,7 @@ export async function GET(request: NextRequest) {
         category: lockedByInitialAnalysis ? "Sigiloso durante análise inicial" : item.category,
         risk: riskLabel(item.risk),
         status: lockedByInitialAnalysis ? initialAnalysisStatusLabel() : statusLabel(item.status),
+        abandonedBySilence: !lockedByInitialAnalysis && abandonedCaseIds.has(item.id),
         escalatedTo: lockedByInitialAnalysis
           ? null
           : item.escalatedToUser?.name ??

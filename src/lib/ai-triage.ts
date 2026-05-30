@@ -14,6 +14,9 @@ export type AttachmentIntelSummary = {
 export type TriageResult = {
   schemaVersion: "1.0.0";
   sanitizedNarrative: string;
+  narrativeForCouncil: string;
+  sanitizationMode: "STRICT" | "BALANCED" | "MINIMAL";
+  sanitizationReason: string;
   aiCategory: string;
   risk: RiskLevel;
   conflictSignals: string[];
@@ -42,15 +45,35 @@ export type TriagePayload = {
   }>;
 };
 
-function sanitizeWithRegex(text: string) {
-  return text
-    .replace(/\b(?:nome|gestor|líder|lider|colaborador|funcionário|funcionario)\s*[:\-]\s*[^\n,.;]{2,80}/gi, "[CAMPO_IDENTIFICADO]")
+function sanitizeWithRegex(
+  text: string,
+  mode: "STRICT" | "BALANCED" | "MINIMAL",
+) {
+  const piiSafe = text
     .replace(/\b(?:matr[ií]cula|registro)\s*[:#-]?\s*[A-Za-z0-9.-]{3,30}\b/gi, "[ID_INTERNO]")
-    .replace(/\b([A-ZÁÂÃÀÉÊÍÓÔÕÚÇ][a-záâãàéêíóôõúç]{2,}\s+[A-ZÁÂÃÀÉÊÍÓÔÕÚÇ][a-záâãàéêíóôõúç]{2,})\b/g, "[NOME_PESSOA]")
     .replace(/\b[\w.+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, "[EMAIL]")
     .replace(/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/g, "[CPF]")
-    .replace(/\b(?:\+?55\s?)?(?:\(?\d{2}\)?\s?)?(?:9?\d{4})-?\d{4}\b/g, "[PHONE]")
-    .replace(/\b\d{4,10}\b/g, "[ID]");
+    .replace(/\b(?:\+?55\s?)?(?:\(?\d{2}\)?\s?)?(?:9?\d{4})-?\d{4}\b/g, "[PHONE]");
+
+  if (mode === "MINIMAL") {
+    return piiSafe;
+  }
+
+  const withNameRedaction = piiSafe
+    .replace(
+      /\b(?:nome|gestor|líder|lider|colaborador|funcionário|funcionario)\s*[:\-]\s*[^\n,.;]{2,80}/gi,
+      "[CAMPO_IDENTIFICADO]",
+    )
+    .replace(
+      /\b([A-ZÁÂÃÀÉÊÍÓÔÕÚÇ][a-záâãàéêíóôõúç]{2,}\s+[A-ZÁÂÃÀÉÊÍÓÔÕÚÇ][a-záâãàéêíóôõúç]{2,})\b/g,
+      "[NOME_PESSOA]",
+    );
+
+  if (mode === "BALANCED") {
+    return withNameRedaction;
+  }
+
+  return withNameRedaction.replace(/\b\d{4,10}\b/g, "[ID]");
 }
 
 function classifyRiskFallback(text: string): RiskLevel {
@@ -110,8 +133,24 @@ function toStringArray(input: unknown): string[] {
   return input.map((item) => String(item).trim()).filter(Boolean).slice(0, 20);
 }
 
+function normalizeSanitizationMode(
+  value: unknown,
+): "STRICT" | "BALANCED" | "MINIMAL" {
+  const raw = String(value || "BALANCED").toUpperCase();
+  if (raw === "STRICT" || raw === "BALANCED" || raw === "MINIMAL") return raw;
+  return "BALANCED";
+}
+
 export async function runAiTriage(payload: TriagePayload): Promise<TriageResult> {
-  const fallbackSanitized = sanitizeWithRegex(payload.narrative);
+  const lower = payload.narrative.toLowerCase();
+  const fallbackMode: "STRICT" | "BALANCED" | "MINIMAL" =
+    lower.includes("assédio") ||
+    lower.includes("assedio") ||
+    lower.includes("violência") ||
+    lower.includes("violencia")
+      ? "MINIMAL"
+      : "BALANCED";
+  const fallbackSanitized = sanitizeWithRegex(payload.narrative, fallbackMode);
   const fallbackCategory = mapCategoryFromNarrative(fallbackSanitized);
   const fallbackRisk = classifyRiskFallback(fallbackSanitized);
   const fallbackAttachmentSummary = normalizeAttachmentSummary(payload.attachments);
@@ -119,6 +158,10 @@ export async function runAiTriage(payload: TriagePayload): Promise<TriageResult>
   const fallbackCompletionTokens = 60;
   const fallbackTotal = fallbackPromptTokens + fallbackCompletionTokens;
   const fallbackBrief = `Denúncia classificada automaticamente como ${fallbackCategory} com risco ${fallbackRisk}. Revisão inicial recomendada para validação de contexto e evidências.`;
+  const fallbackSanitizationReason =
+    fallbackMode === "MINIMAL"
+      ? "Contexto sugere necessidade de manter identidade funcional para utilidade investigativa."
+      : "Aplicada anonimização equilibrada para preservar utilidade e reduzir exposição de dados.";
   const fallbackConflictSignals = toStringArray(
     payload.narrative.match(/\b(gestor|diretor|lider|líder|rh|compliance|financeiro)\b/gi) ?? [],
   );
@@ -127,6 +170,9 @@ export async function runAiTriage(payload: TriagePayload): Promise<TriageResult>
     return {
       schemaVersion: "1.0.0",
       sanitizedNarrative: fallbackSanitized,
+      narrativeForCouncil: fallbackSanitized,
+      sanitizationMode: fallbackMode,
+      sanitizationReason: fallbackSanitizationReason,
       aiCategory: fallbackCategory,
       risk: fallbackRisk,
       conflictSignals: fallbackConflictSignals,
@@ -154,7 +200,7 @@ export async function runAiTriage(payload: TriagePayload): Promise<TriageResult>
         {
           role: "system",
           content:
-            "Você é um motor de triagem de denúncias corporativas. Responda SOMENTE em JSON com campos: schemaVersion, sanitizedNarrative, aiCategory, risk, conflictSignals, autoBlockedUserNames, recommendedCouncilBrief, attachmentSummary. attachmentSummary deve ser array com fileName, mimeType, sizeBytes, summary, riskHints, confidence.",
+            "Você é um motor de triagem de denúncias corporativas. Responda SOMENTE em JSON com campos: schemaVersion, sanitizedNarrative, narrativeForCouncil, sanitizationMode (STRICT|BALANCED|MINIMAL), sanitizationReason, aiCategory, risk, conflictSignals, autoBlockedUserNames, recommendedCouncilBrief, attachmentSummary. Em MINIMAL preserve nomes quando forem necessários para investigação (ex.: assédio), mas sempre remova CPF, telefone e e-mail.",
         },
         {
           role: "user",
@@ -170,8 +216,14 @@ export async function runAiTriage(payload: TriagePayload): Promise<TriageResult>
     const raw = completion.choices[0]?.message?.content ?? "{}";
     const parsed = JSON.parse(raw) as Record<string, unknown>;
 
+    const aiMode = normalizeSanitizationMode(parsed.sanitizationMode);
     const sanitizedNarrative = sanitizeWithRegex(
       String(parsed.sanitizedNarrative ?? fallbackSanitized).trim() || fallbackSanitized,
+      "STRICT",
+    );
+    const narrativeForCouncil = sanitizeWithRegex(
+      String(parsed.narrativeForCouncil ?? payload.narrative).trim() || payload.narrative,
+      aiMode,
     );
     const aiCategory = String(parsed.aiCategory ?? fallbackCategory).trim().slice(0, 80) || fallbackCategory;
     const risk = normalizeRisk(parsed.risk, fallbackRisk);
@@ -179,6 +231,9 @@ export async function runAiTriage(payload: TriagePayload): Promise<TriageResult>
     const autoBlockedUserNames = toStringArray(parsed.autoBlockedUserNames);
     const recommendedCouncilBrief =
       String(parsed.recommendedCouncilBrief ?? "").trim().slice(0, 700) || fallbackBrief;
+    const sanitizationReason =
+      String(parsed.sanitizationReason ?? "").trim().slice(0, 500) ||
+      fallbackSanitizationReason;
     const attachmentSummary = Array.isArray(parsed.attachmentSummary)
       ? (parsed.attachmentSummary as unknown[])
           .map((item, index) => {
@@ -204,6 +259,9 @@ export async function runAiTriage(payload: TriagePayload): Promise<TriageResult>
     return {
       schemaVersion: "1.0.0",
       sanitizedNarrative,
+      narrativeForCouncil,
+      sanitizationMode: aiMode,
+      sanitizationReason,
       aiCategory,
       risk,
       conflictSignals,
@@ -224,6 +282,9 @@ export async function runAiTriage(payload: TriagePayload): Promise<TriageResult>
     return {
       schemaVersion: "1.0.0",
       sanitizedNarrative: fallbackSanitized,
+      narrativeForCouncil: fallbackSanitized,
+      sanitizationMode: fallbackMode,
+      sanitizationReason: fallbackSanitizationReason,
       aiCategory: fallbackCategory,
       risk: fallbackRisk,
       conflictSignals: fallbackConflictSignals,

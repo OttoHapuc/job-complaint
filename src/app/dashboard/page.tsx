@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import {
@@ -25,6 +25,7 @@ type DashboardCase = {
   risk: RiskLevel
   lastInteraction: string
   status: string
+  abandonedBySilence?: boolean
   escalatedTo?: string | null
 }
 
@@ -62,6 +63,7 @@ function StatusBadge({ status }: { status: string }) {
 export default function DashboardPage() {
   const router = useRouter()
   const [cases, setCases] = useState<DashboardCase[]>([])
+  const [flowFilter, setFlowFilter] = useState<"all" | "abandoned">("all")
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState("")
   const [metrics, setMetrics] = useState([
@@ -135,6 +137,13 @@ export default function DashboardPage() {
     void loadDashboard()
   }, [router])
 
+  const visibleCases = useMemo(() => {
+    if (flowFilter === "abandoned") {
+      return cases.filter((item) => Boolean(item.abandonedBySilence))
+    }
+    return cases
+  }, [cases, flowFilter])
+
   return (
     <div className="px-6 py-8 space-y-8">
       {/* Page header */}
@@ -197,12 +206,30 @@ export default function DashboardPage() {
             <h2 className="text-sm font-semibold">Denúncias Recentes</h2>
             <p className="text-xs text-muted-foreground mt-0.5">Últimas interações registradas</p>
           </div>
-          <Link href="/dashboard/casos">
-            <Button variant="outline" size="sm" className="gap-1.5 text-xs">
-              Ver todos
-              <ChevronRight className="h-3.5 w-3.5" />
-            </Button>
-          </Link>
+          <div className="flex items-center gap-2">
+            {([
+              { id: "all", label: "Todos" },
+              { id: "abandoned", label: "Abandonados" },
+            ] as const).map((option) => (
+              <button
+                key={option.id}
+                onClick={() => setFlowFilter(option.id)}
+                className={`px-3 py-1.5 text-xs font-medium border rounded-sm transition-colors ${
+                  flowFilter === option.id
+                    ? "bg-foreground text-background border-foreground"
+                    : "border-border text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+            <Link href="/dashboard/casos">
+              <Button variant="outline" size="sm" className="gap-1.5 text-xs">
+                Ver todos
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Button>
+            </Link>
+          </div>
         </div>
 
         <div className="border border-border rounded-sm overflow-hidden">
@@ -221,10 +248,10 @@ export default function DashboardPage() {
             {!isLoading && loadError && (
               <div className="px-5 py-4 text-sm text-red-600 dark:text-red-400">{loadError}</div>
             )}
-            {!isLoading && !loadError && cases.length === 0 && (
+            {!isLoading && !loadError && visibleCases.length === 0 && (
               <div className="px-5 py-4 text-sm text-muted-foreground">Nenhum caso encontrado para este tenant.</div>
             )}
-            {!isLoading && !loadError && cases.map((c) => (
+            {!isLoading && !loadError && visibleCases.map((c) => (
               <Link
                 key={String(c.id)}
                 href={`/dashboard/casos/${c.externalId.toLowerCase().replace("caso-", "")}`}
@@ -236,6 +263,11 @@ export default function DashboardPage() {
                 <span className="text-sm text-muted-foreground font-mono">{c.lastInteraction}</span>
                 <div className="flex flex-col gap-1">
                   <StatusBadge status={c.status} />
+                  {c.abandonedBySilence ? (
+                    <span className="text-[10px] text-amber-700 dark:text-amber-300">
+                      Encaminhado por ausência de resposta
+                    </span>
+                  ) : null}
                   {c.status === "Escalonado" && c.escalatedTo ? (
                     <span className="text-[10px] text-muted-foreground">Responsável: {c.escalatedTo}</span>
                   ) : null}

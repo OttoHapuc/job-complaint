@@ -20,6 +20,12 @@ const ACTION_DICTIONARY: Record<string, string> = {
     "Caso retornou para investigação após rejeição do comitê.",
   CASE_ACCESS_RESTRICTION_UPDATED:
     "Restrições de acesso do caso foram atualizadas por conflito identificado.",
+  CASE_IMPLICATED_PERSON_ADDED:
+    "Pessoa implicada foi registrada no caso para investigação.",
+  CASE_IMPLICATED_PERSON_REINFORCED:
+    "Pessoa implicada teve recorrência reforçada durante novas interações.",
+  CASE_ABANDONMENT_THRESHOLD_REACHED:
+    "Caso atingiu janela de abandono sem resposta e foi encaminhado para pre-conclusão.",
 
   // Participants
   CASE_PARTICIPANT_INVITED: "Pessoa envolvida/corroboradora foi convidada.",

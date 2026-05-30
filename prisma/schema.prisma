@@ -387,8 +387,12 @@ model CaseImplicatedPerson {
   case                  Case            @relation(fields: [caseId], references: [id], onDelete: Cascade)
   linkedUserId          String?
   displayNameEncrypted  String
+  displayNameHash       String          @default("")
   roleHint              String?
   source                String
+  mentionCount          Int             @default(1)
+  firstMentionedAt      DateTime        @default(now())
+  lastMentionedAt       DateTime        @default(now())
   disclosureLevel       DisclosureLevel @default(ROLE_ONLY)
   disclosedAt           DateTime?
   disclosedByUserId     String?
@@ -396,6 +400,7 @@ model CaseImplicatedPerson {
   updatedAt             DateTime        @updatedAt
 
   @@index([tenantId, caseId, createdAt(sort: Desc)])
+  @@index([tenantId, displayNameHash, lastMentionedAt(sort: Desc)])
 }
 
 model CaseParticipant {

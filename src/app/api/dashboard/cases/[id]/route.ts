@@ -109,6 +109,10 @@ export async function GET(
           source: true,
           disclosureLevel: true,
           displayNameEncrypted: true,
+          displayNameHash: true,
+          mentionCount: true,
+          firstMentionedAt: true,
+          lastMentionedAt: true,
         },
       },
     },
@@ -129,6 +133,63 @@ export async function GET(
     createdAt: reportCase.createdAt,
     reviewConcludedAt: reportCase.reviewConcludedAt,
   });
+  const abandonedBySilence = reportCase.auditEvents.some(
+    (event) => event.action === "CASE_ABANDONMENT_THRESHOLD_REACHED",
+  );
+
+  const involvementByHash = new Map<
+    string,
+    {
+      totalMentions: number;
+      distinctCaseIds: Set<string>;
+      lastMentionedAt: Date | null;
+      recentCaseExternalIds: Set<string>;
+    }
+  >();
+
+  if (!lockedByInitialAnalysis && reportCase.implicatedPeople.length > 0) {
+    const hashes = Array.from(
+      new Set(
+        reportCase.implicatedPeople
+          .map((person) => person.displayNameHash)
+          .filter((value) => value.trim().length > 0),
+      ),
+    );
+    if (hashes.length > 0) {
+      const related = await prisma.caseImplicatedPerson.findMany({
+        where: {
+          tenantId: allowed.user.tenantId,
+          displayNameHash: { in: hashes },
+        },
+        select: {
+          displayNameHash: true,
+          mentionCount: true,
+          caseId: true,
+          lastMentionedAt: true,
+          case: {
+            select: {
+              externalId: true,
+            },
+          },
+        },
+      });
+      for (const item of related) {
+        const current = involvementByHash.get(item.displayNameHash) ?? {
+          totalMentions: 0,
+          distinctCaseIds: new Set<string>(),
+          lastMentionedAt: null,
+          recentCaseExternalIds: new Set<string>(),
+        };
+        current.totalMentions += Math.max(1, item.mentionCount || 1);
+        current.distinctCaseIds.add(item.caseId);
+        current.recentCaseExternalIds.add(item.case.externalId);
+        if (!current.lastMentionedAt || item.lastMentionedAt > current.lastMentionedAt) {
+          current.lastMentionedAt = item.lastMentionedAt;
+        }
+        involvementByHash.set(item.displayNameHash, current);
+      }
+    }
+  }
 
   return NextResponse.json({
     ok: true,
@@ -149,6 +210,7 @@ export async function GET(
         : decryptSensitiveText(reportCase.description),
       category: lockedByInitialAnalysis ? "Sigiloso durante análise inicial" : reportCase.category,
       status: buildStatusLabel(reportCase.status, lockedByInitialAnalysis),
+      abandonedBySilence: !lockedByInitialAnalysis && abandonedBySilence,
       risk: lockedByInitialAnalysis ? "Sigiloso" : riskLabel(reportCase.risk),
       createdAt: reportCase.createdAt.toISOString(),
       updatedAt: reportCase.updatedAt.toISOString(),
@@ -220,6 +282,27 @@ export async function GET(
               roleHint: person.roleHint,
               disclosureLevel: person.disclosureLevel,
               visibleName,
+              mentionCount: person.mentionCount,
+              firstMentionedAt: person.firstMentionedAt.toISOString(),
+              lastMentionedAt: person.lastMentionedAt.toISOString(),
+              involvement: (() => {
+                const stats = involvementByHash.get(person.displayNameHash);
+                if (!stats) {
+                  return {
+                    totalMentions: person.mentionCount,
+                    caseCount: 1,
+                    recentCaseExternalIds: [reportCase.externalId],
+                    lastMentionedAt: person.lastMentionedAt.toISOString(),
+                  };
+                }
+                return {
+                  totalMentions: stats.totalMentions,
+                  caseCount: stats.distinctCaseIds.size,
+                  recentCaseExternalIds: Array.from(stats.recentCaseExternalIds).slice(0, 5),
+                  lastMentionedAt:
+                    stats.lastMentionedAt?.toISOString() ?? person.lastMentionedAt.toISOString(),
+                };
+              })(),
             };
           }),
     },
