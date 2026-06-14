@@ -6,10 +6,15 @@
     "dev": "next dev --webpack",
     "dev:turbo": "next dev",
     "build": "next build",
+    "vercel-build": "prisma generate && next build",
+    "postinstall": "prisma generate",
     "start": "next start",
     "lint": "eslint",
     "ops:smoke": "node scripts/ops-smoke.mjs",
-    "sla:check": "node scripts/sla-metrics-check.mjs"
+    "sla:check": "node scripts/sla-metrics-check.mjs",
+    "env:audit": "node scripts/env-audit.mjs",
+    "env:audit:prod": "ENV_AUDIT_TARGET=production node scripts/env-audit.mjs",
+    "env:bootstrap": "node scripts/env-bootstrap.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1053.0",

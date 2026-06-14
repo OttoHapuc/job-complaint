@@ -20,7 +20,14 @@ function buildSchemaFingerprint() {
     .join("|");
 }
 
-const pool = globalForPrisma.pgPool ?? new Pool({ connectionString });
+const pool =
+  globalForPrisma.pgPool ??
+  new Pool({
+    connectionString,
+    max: process.env.VERCEL === "1" ? 1 : 10,
+    idleTimeoutMillis: 20_000,
+    connectionTimeoutMillis: 10_000,
+  });
 const adapter = new PrismaPg(pool);
 
 function createPrismaClient() {

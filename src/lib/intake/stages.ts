@@ -7,7 +7,6 @@ import {
   RiskLevel,
   WhistleblowerInteractionStatus,
 } from "@prisma/client";
-import { createHash } from "crypto";
 import { prisma } from "@/lib/prisma";
 import { createImmutableAuditEvent } from "@/lib/audit";
 import { runAiPromptInjectionGuard } from "@/lib/ai-guard";

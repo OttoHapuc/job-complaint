@@ -7,7 +7,7 @@ INTERVAL_SECONDS="${OUTBOX_CRON_INTERVAL_SECONDS:-300}"
 RUN_ONCE="${OUTBOX_CRON_RUN_ONCE:-false}"
 
 process_outbox() {
-  local url="${APP_BASE_URL%/}/api/internal/outbox/process"
+  local url="${APP_BASE_URL%/}/api/cron/outbox"
   local args=(
     -sS
     -X POST
@@ -16,7 +16,9 @@ process_outbox() {
     -w "\nHTTP %{http_code}\n"
   )
 
-  if [[ -n "$OUTBOX_PROCESSOR_SECRET" ]]; then
+  if [[ -n "${CRON_SECRET:-}" ]]; then
+    args+=(-H "Authorization: Bearer ${CRON_SECRET}")
+  elif [[ -n "$OUTBOX_PROCESSOR_SECRET" ]]; then
     args+=(-H "x-outbox-secret: ${OUTBOX_PROCESSOR_SECRET}")
   fi
 
@@ -24,7 +26,7 @@ process_outbox() {
 }
 
 notify_sla() {
-  local url="${APP_BASE_URL%/}/api/internal/ops/sla-notify"
+  local url="${APP_BASE_URL%/}/api/cron/sla-notify"
   local args=(
     -sS
     -X POST
@@ -33,7 +35,9 @@ notify_sla() {
     -w "\nHTTP %{http_code}\n"
   )
 
-  if [[ -n "$OUTBOX_PROCESSOR_SECRET" ]]; then
+  if [[ -n "${CRON_SECRET:-}" ]]; then
+    args+=(-H "Authorization: Bearer ${CRON_SECRET}")
+  elif [[ -n "$OUTBOX_PROCESSOR_SECRET" ]]; then
     args+=(-H "x-outbox-secret: ${OUTBOX_PROCESSOR_SECRET}")
   fi
 

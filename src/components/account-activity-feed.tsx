@@ -21,6 +21,10 @@ type ActivityUser = {
 }
 
 export function AccountActivityFeed(props: { userId?: string; title?: string }) {
+  return <AccountActivityFeedBody key={props.userId ?? "self"} {...props} />
+}
+
+function AccountActivityFeedBody(props: { userId?: string; title?: string }) {
   const [items, setItems] = useState<ActivityItem[]>([])
   const [user, setUser] = useState<ActivityUser | null>(null)
   const [nextCursor, setNextCursor] = useState<string | null>(null)
@@ -51,10 +55,6 @@ export function AccountActivityFeed(props: { userId?: string; title?: string }) 
   }, [props.userId])
 
   useEffect(() => {
-    setLoading(true)
-    setError("")
-    setItems([])
-    cursorRef.current = null
     void fetchPage(null)
       .then((data) => {
         setUser(data.user ?? null)

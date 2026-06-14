@@ -3,7 +3,9 @@
 ## 1) Checklist de go-live
 
 - [ ] Variáveis críticas configuradas (`DATABASE_URL`, `JWT_SECRET`, chaves de provedores externos)
+- [ ] Validação local: `npm run env:audit` (dev) / `npm run env:audit:prod` (antes do deploy)
 - [ ] `OUTBOX_PROCESSOR_SECRET` definido em produção
+- [ ] `CRON_SECRET` definido na Vercel (cron jobs da esteira)
 - [ ] `ALLOW_DEV_ROUTES=false` em produção (ou `true` apenas em staging controlado)
 - [ ] Banco sincronizado (`npx prisma db push`)
 - [ ] Build validado (`npm run build`)
@@ -170,3 +172,46 @@ Pipeline em `.github/workflows/ci.yml` bloqueia merge quando falhar:
 - lint
 - build
 - smoke operacional (`/api/ops/health`, `/api/ops/readiness`, `/api/ops/status`, `/api/ops/pipeline/stagnation` + métricas outbox)
+
+## 9) Deploy na Vercel
+
+### 9.1 Pré-requisitos
+
+- PostgreSQL acessível pela Vercel (Neon, Supabase, Vercel Postgres, etc.) com URL **pooled**
+- `npx prisma db push` executado no banco de produção antes do primeiro deploy
+- Plano com **Cron Jobs** habilitado (Pro) para a esteira outbox
+
+### 9.2 Configuração do projeto
+
+O repositório inclui `vercel.json` com:
+
+- `buildCommand`: `npm run vercel-build` (`prisma generate` + `next build`)
+- Cron `*/5 * * * *` → `GET /api/cron/outbox`
+- Cron `0 8 * * *` → `GET /api/cron/sla-notify`
+
+Variáveis críticas na Vercel:
+
+| Variável | Uso |
+|----------|-----|
+| `DATABASE_URL` | Postgres pooled |
+| `JWT_SECRET` | Sessão |
+| `CRON_SECRET` | Bearer enviado automaticamente pelos crons da Vercel |
+| `OUTBOX_PROCESSOR_SECRET` | Scripts locais / sidecar (`x-outbox-secret`) |
+| `APP_BASE_URL` | URL pública do app |
+| `ALLOW_DEV_ROUTES` | `false` em produção |
+
+Recomenda-se definir `CRON_SECRET` e `OUTBOX_PROCESSOR_SECRET` com o **mesmo valor** forte, ou manter ambos e usar qualquer um na autenticação interna.
+
+### 9.3 Autenticação de jobs
+
+Rotas `/api/cron/*` e `/api/internal/*` aceitam:
+
+- `Authorization: Bearer <CRON_SECRET>` (Vercel Cron)
+- `x-outbox-secret: <OUTBOX_PROCESSOR_SECRET>` (script `outbox-cron.sh`)
+- `?secret=` (fallback manual)
+
+### 9.4 Pós-deploy
+
+1. `GET /api/ops/readiness` → `200`
+2. Aguardar 5 min e conferir `GET /api/ops/status` (`outbox.pending` estável)
+3. `SMOKE_BASE_URL=https://seu-dominio npm run ops:smoke`

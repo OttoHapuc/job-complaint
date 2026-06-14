@@ -1,10 +1,11 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useSyncExternalStore } from "react"
 import { Moon, Sun } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
 const THEME_STORAGE_KEY = "jc_theme"
+const THEME_CHANGE_EVENT = "jc-theme-change"
 
 type ThemeMode = "light" | "dark"
 
@@ -21,20 +22,34 @@ function applyTheme(theme: ThemeMode) {
   root.style.colorScheme = theme
 }
 
+function subscribeTheme(onStoreChange: () => void) {
+  const media = window.matchMedia("(prefers-color-scheme: dark)")
+  media.addEventListener("change", onStoreChange)
+  window.addEventListener(THEME_CHANGE_EVENT, onStoreChange)
+  window.addEventListener("storage", onStoreChange)
+  return () => {
+    media.removeEventListener("change", onStoreChange)
+    window.removeEventListener(THEME_CHANGE_EVENT, onStoreChange)
+    window.removeEventListener("storage", onStoreChange)
+  }
+}
+
 export function ThemeToggle() {
-  const [theme, setTheme] = useState<ThemeMode>("light")
+  const theme = useSyncExternalStore(
+    subscribeTheme,
+    () => getPreferredTheme(),
+    (): ThemeMode => "light",
+  )
 
   useEffect(() => {
-    const initialTheme = getPreferredTheme()
-    setTheme(initialTheme)
-    applyTheme(initialTheme)
-  }, [])
+    applyTheme(theme)
+  }, [theme])
 
   const toggleTheme = () => {
     const nextTheme: ThemeMode = theme === "dark" ? "light" : "dark"
-    setTheme(nextTheme)
     applyTheme(nextTheme)
     window.localStorage.setItem(THEME_STORAGE_KEY, nextTheme)
+    window.dispatchEvent(new Event(THEME_CHANGE_EVENT))
   }
 
   return (
@@ -51,4 +66,3 @@ export function ThemeToggle() {
     </Button>
   )
 }
-
