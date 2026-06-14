@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { hashInviteToken } from "@/lib/security";
 import { createImmutableAuditEvent } from "@/lib/audit";
-import { encryptSensitiveText } from "@/lib/secure-data";
+import { encryptSensitiveText, decryptSensitiveText } from "@/lib/secure-data";
 import { runAiPromptInjectionGuard } from "@/lib/ai-guard";
+import { sendParticipantResponseReceivedNotification } from "@/lib/notifications";
 
 type InviteResponseBody = {
   questionText?: string;
@@ -48,6 +49,9 @@ export async function POST(
             select: { id: true, externalId: true },
           },
         },
+      },
+      tenant: {
+        select: { name: true },
       },
     },
   });
@@ -120,6 +124,18 @@ export async function POST(
 
     return response;
   });
+
+  const profile = JSON.parse(
+    decryptSensitiveText(invite.caseParticipant.emailEncrypted) || "{}",
+  ) as { contact?: string };
+  const participantEmail = profile.contact?.trim().toLowerCase();
+  if (participantEmail) {
+    void sendParticipantResponseReceivedNotification({
+      to: participantEmail,
+      tenantName: invite.tenant.name,
+      caseExternalId: invite.caseParticipant.case.externalId,
+    }).catch(() => {});
+  }
 
   return NextResponse.json({
     ok: true,

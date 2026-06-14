@@ -9,7 +9,8 @@ export async function GET() {
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
   try {
-    const [openCases, escalatedCases, casesCreated24h, aiEvents24h, tenantsCount] = await Promise.all([
+    const [openCases, escalatedCases, casesCreated24h, aiEvents24h, tenantsCount, outboxPending, outboxFailed, outboxDead] =
+      await Promise.all([
       prisma.case.count({
         where: {
           status: {
@@ -38,11 +39,17 @@ export async function GET() {
         },
       }),
       prisma.tenant.count(),
+      prisma.outboxMessage.count({ where: { status: "PENDING" } }),
+      prisma.outboxMessage.count({ where: { status: "FAILED" } }),
+      prisma.outboxMessage.count({ where: { status: "DEAD" } }),
     ]);
+
+    const operationalStatus =
+      outboxFailed > 0 || outboxDead > 0 ? "degraded" : "operational";
 
     const payload = {
       ok: true,
-      status: "operational",
+      status: operationalStatus,
       requestId,
       generatedAt: now.toISOString(),
       windowHours: 24,
@@ -53,12 +60,17 @@ export async function GET() {
         casesCreated24h,
         aiTriages24h: aiEvents24h,
       },
+      outbox: {
+        pending: outboxPending,
+        failed: outboxFailed,
+        dead: outboxDead,
+      },
     };
 
     logInfo("ops.status.generated", {
       requestId,
       scope: "ops.status",
-      data: payload.metrics,
+      data: { ...payload.metrics, outbox: payload.outbox, status: payload.status },
     });
 
     return NextResponse.json(payload);

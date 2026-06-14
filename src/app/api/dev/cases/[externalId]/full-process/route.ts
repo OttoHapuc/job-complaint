@@ -3,14 +3,11 @@ import { prisma } from "@/lib/prisma";
 import { describeAuditAction, resolveAuditActorLabel } from "@/lib/audit-action";
 import { decryptEmail } from "@/lib/secure-email";
 import { decryptSensitiveText } from "@/lib/secure-data";
+import { ensureDevRouteAccess } from "@/lib/dev-routes";
 
 function ensureDebugAccess(request: NextRequest) {
-  if (process.env.NODE_ENV === "production") {
-    return NextResponse.json(
-      { error: "Rota de apuração disponível apenas fora de produção." },
-      { status: 403 },
-    );
-  }
+  const blocked = ensureDevRouteAccess();
+  if (blocked) return blocked;
   const expectedKey = process.env.CASE_FORENSIC_DEBUG_KEY?.trim();
   if (!expectedKey) return null;
   const provided = request.headers.get("x-debug-key")?.trim();

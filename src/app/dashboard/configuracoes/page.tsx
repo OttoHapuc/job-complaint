@@ -7,6 +7,7 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { AccountActivityFeed } from "@/components/account-activity-feed"
 
 type Member = {
   id: string
@@ -15,6 +16,8 @@ type Member = {
   email: string
   isCorporateAccount?: boolean
   isActive: boolean
+  mustChangePassword?: boolean
+  lastLoginAt?: string | null
   createdAt: string
 }
 
@@ -58,6 +61,9 @@ export default function ConfiguracoesPage() {
   const [memberCompanyRoleDrafts, setMemberCompanyRoleDrafts] = useState<Record<string, string>>({})
   const [memberActiveDrafts, setMemberActiveDrafts] = useState<Record<string, boolean>>({})
   const [newMemberIsActive, setNewMemberIsActive] = useState(true)
+  const [expandedAuditMemberId, setExpandedAuditMemberId] = useState<string | null>(null)
+  const [resetMemberId, setResetMemberId] = useState<string | null>(null)
+  const [resetPasswordValue, setResetPasswordValue] = useState("")
 
   const loadPlan = async () => {
     try {
@@ -91,13 +97,15 @@ export default function ConfiguracoesPage() {
 
       const data = await response.json()
       setMembers(
-        (data.members ?? []).map((member: { id: string; name: string; companyRole: string; email: string; isCorporateAccount?: boolean; isActive: boolean; createdAt: string }) => ({
+        (data.members ?? []).map((member: Member) => ({
           id: member.id,
           name: member.name,
           companyRole: member.companyRole,
           email: member.email,
           isCorporateAccount: member.isCorporateAccount === true,
           isActive: member.isActive ?? true,
+          mustChangePassword: member.mustChangePassword === true,
+          lastLoginAt: member.lastLoginAt ?? null,
           createdAt: member.createdAt,
         })),
       )
@@ -193,6 +201,11 @@ export default function ConfiguracoesPage() {
         setMembersError(body.error ?? "Não foi possível criar membro.")
         return
       }
+      if (body.emailDelivered === false) {
+        setMembersError(
+          "Membro criado, mas o e-mail de boas-vindas não foi entregue. Verifique SES e supressões.",
+        )
+      }
       setShowMemberForm(false)
       setNewMemberName("")
       setNewMemberCompanyRole("")
@@ -228,6 +241,35 @@ export default function ConfiguracoesPage() {
       await loadMembers()
     } catch {
       setMembersError("Falha de conexão ao atualizar membro.")
+    }
+  }
+
+  const resetMemberPassword = async (memberId: string) => {
+    if (!resetPasswordValue.trim() || resetPasswordValue.trim().length < 8) {
+      setMembersError("Informe uma senha temporária com no mínimo 8 caracteres.")
+      return
+    }
+    try {
+      const response = await fetch(`/api/settings/members/${memberId}/reset-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: resetPasswordValue }),
+      })
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        setMembersError(body.error ?? "Não foi possível redefinir a senha.")
+        return
+      }
+      setResetMemberId(null)
+      setResetPasswordValue("")
+      setMembersError(
+        body.emailDelivered === false
+          ? "Senha redefinida. E-mail de aviso não foi entregue — informe a senha temporária manualmente."
+          : "Senha redefinida. O membro deve acessar e criar uma nova senha pessoal.",
+      )
+      await loadMembers()
+    } catch {
+      setMembersError("Falha de conexão ao redefinir senha.")
     }
   }
 
@@ -330,6 +372,10 @@ export default function ConfiguracoesPage() {
           <p className="text-xs text-muted-foreground">
             Somente a conta corporativa gerencia configurações e membros. Integrantes profissionais acessam casos e resultados.
           </p>
+              <p className="text-xs text-muted-foreground">
+            Novos membros recebem e-mail de boas-vindas e devem trocar a senha no primeiro acesso.
+            A senha temporária não é enviada por e-mail.
+          </p>
           {membersError && <p className="text-xs text-red-600 dark:text-red-400">{membersError}</p>}
 
           {showMemberForm && (
@@ -400,7 +446,8 @@ export default function ConfiguracoesPage() {
                 <div className="px-5 py-4 text-sm text-muted-foreground">Nenhum membro encontrado.</div>
               )}
               {!isLoadingMembers && members.map((m) => (
-                <div key={m.id} className="flex flex-col md:grid md:grid-cols-[1.5fr_1.7fr_2fr_1.2fr_1fr_1fr] gap-2 md:gap-4 px-5 py-4 items-start md:items-center">
+                <div key={m.id} className="px-5 py-4 space-y-3">
+                  <div className="flex flex-col md:grid md:grid-cols-[1.5fr_1.7fr_2fr_1.2fr_1fr_auto] gap-2 md:gap-4 md:items-center">
                   <span className="text-sm font-medium text-foreground">{m.name}</span>
                   <span className="text-sm text-muted-foreground font-mono text-xs">{m.email}</span>
                   {m.isCorporateAccount ? (
@@ -437,6 +484,7 @@ export default function ConfiguracoesPage() {
                       ativo
                     </label>
                   )}
+                  <div className="flex flex-wrap gap-2">
                   <Button
                     size="sm"
                     variant="outline"
@@ -446,6 +494,53 @@ export default function ConfiguracoesPage() {
                   >
                     Salvar
                   </Button>
+                  {!m.isCorporateAccount && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-xs h-7"
+                      onClick={() => {
+                        setResetMemberId((prev) => (prev === m.id ? null : m.id))
+                        setResetPasswordValue("")
+                      }}
+                    >
+                      Redefinir senha
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-xs h-7"
+                    onClick={() =>
+                      setExpandedAuditMemberId((prev) => (prev === m.id ? null : m.id))
+                    }
+                  >
+                    Auditoria
+                  </Button>
+                  </div>
+                  </div>
+                  {!m.isCorporateAccount && m.mustChangePassword && (
+                    <Badge variant="outline" className="text-[10px]">
+                      Troca de senha pendente
+                    </Badge>
+                  )}
+                  {resetMemberId === m.id && !m.isCorporateAccount && (
+                    <div className="border border-border rounded-sm p-3 flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="password"
+                        value={resetPasswordValue}
+                        onChange={(e) => setResetPasswordValue(e.target.value)}
+                        placeholder="Nova senha temporária (mín. 8)"
+                        className="flex-1 bg-background border border-border rounded-sm px-3 py-2 text-sm"
+                      />
+                      <Button size="sm" className="text-xs" onClick={() => resetMemberPassword(m.id)}>
+                        Confirmar
+                      </Button>
+                    </div>
+                  )}
+                  {expandedAuditMemberId === m.id && (
+                    <AccountActivityFeed userId={m.id} title={`Auditoria · ${m.name}`} />
+                  )}
                 </div>
               ))}
             </div>

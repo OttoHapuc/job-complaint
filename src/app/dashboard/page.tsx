@@ -70,30 +70,30 @@ export default function DashboardPage() {
     {
       label: "Casos Ativos",
       value: "0",
-      change: "Atualizado em tempo real",
+      change: "Em andamento no tenant",
       trend: "up" as MetricTrend,
       icon: FileText,
     },
     {
-      label: "Casos Críticos Pendentes",
+      label: "SLA vence hoje",
       value: "0",
-      change: "Requer atenção imediata",
+      change: "Primeira resposta ou resolução",
+      trend: "critical" as MetricTrend,
+      icon: Clock,
+    },
+    {
+      label: "SLA em atraso",
+      value: "0",
+      change: "Requer ação do conselho",
       trend: "critical" as MetricTrend,
       icon: AlertTriangle,
     },
     {
-      label: "Tempo Médio de Resolução (SLA)",
-      value: "N/D",
-      change: "Disponível na próxima fase",
-      trend: "down" as MetricTrend,
-      icon: Clock,
-    },
-    {
-      label: "Casos Resolvidos (30 dias)",
+      label: "Abandonados",
       value: "0",
-      change: "Janela móvel de 30 dias",
-      trend: "good" as MetricTrend,
-      icon: TrendingUp,
+      change: "Encaminhados por silêncio",
+      trend: "down" as MetricTrend,
+      icon: TrendingDown,
     },
   ])
 
@@ -117,15 +117,21 @@ export default function DashboardPage() {
         setCases(data.cases ?? [])
         setMetrics((prev) => [
           { ...prev[0], value: String(data.metrics?.activeCases ?? 0) },
-          { ...prev[1], value: String(data.metrics?.criticalPendingCases ?? 0) },
+          {
+            ...prev[1],
+            value: String(data.metrics?.sla?.dueToday ?? 0),
+            trend: (data.metrics?.sla?.dueToday ?? 0) > 0 ? "critical" : "up",
+          },
           {
             ...prev[2],
-            value:
-              typeof data.metrics?.averageSlaDays === "number"
-                ? `${data.metrics.averageSlaDays.toFixed(1)} dias`
-                : "N/D",
+            value: String(data.metrics?.sla?.overdue ?? 0),
+            trend: (data.metrics?.sla?.overdue ?? 0) > 0 ? "critical" : "good",
           },
-          { ...prev[3], value: String(data.metrics?.resolvedLast30Days ?? 0) },
+          {
+            ...prev[3],
+            value: String(data.metrics?.sla?.abandoned ?? 0),
+            trend: (data.metrics?.sla?.abandoned ?? 0) > 0 ? "critical" : "good",
+          },
         ])
       } catch {
         setLoadError("Falha de conexão ao carregar dashboard.")

@@ -13,6 +13,8 @@ import { buildRateLimitKey } from "@/lib/request";
 import { SECURITY_CONFIG } from "@/lib/config";
 import { encryptSensitiveText } from "@/lib/secure-data";
 import { enqueueOutboxAction } from "@/lib/intake/outbox";
+import { sendWhistleblowerReportConfirmationNotification } from "@/lib/notifications";
+import { extractWhistleblowerEmail } from "@/lib/whistleblower-contact";
 
 type ConversationMessage = {
   role: "user" | "ai";
@@ -263,6 +265,16 @@ export async function POST(request: NextRequest) {
       },
     });
   });
+
+  const whistleblowerEmail = extractWhistleblowerEmail(intakePayload.whistleblowerContact);
+  if (whistleblowerEmail) {
+    void sendWhistleblowerReportConfirmationNotification({
+      to: whistleblowerEmail,
+      tenantName: tenant.name,
+      caseExternalId,
+      trackingToken: token,
+    }).catch(() => {});
+  }
 
   return NextResponse.json({
     ok: true,

@@ -1,0 +1,28 @@
+[defaults]
+ide = "cursor-agent"
+model = "composer-1"
+reasoning_effort = "medium"
+access_mode = "full"
+timeout = "15m"
+auto_commit = false
+max_retries = 2
+retry_backoff_multiplier = 1.5
+
+[tasks]
+types = ["frontend", "backend", "docs", "test", "infra", "refactor", "chore", "bugfix"]
+
+[tasks.run]
+include_completed = false
+run_multiple_mode = "enqueued"
+
+[[tasks.run.task_runtime_rules]]
+type = "docs"
+ide = "claude"
+model = "opus"
+reasoning_effort = "medium"
+
+[[tasks.run.task_runtime_rules]]
+type = "frontend"
+ide = "cursor-agent"
+model = "composer-1"
+reasoning_effort = "high"

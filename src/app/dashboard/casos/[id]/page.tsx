@@ -25,6 +25,8 @@ type CaseDetail = {
   category: string
   status: string
   abandonedBySilence?: boolean
+  abandonmentConfirmed?: boolean
+  canConfirmAbandonment?: boolean
   risk: "Crítico" | "Médio" | "Baixo" | "Sigiloso"
   createdAt: string
   updatedAt: string
@@ -190,6 +192,29 @@ export default function CaseInvestigationPage() {
     }
   }
 
+  const confirmAbandonment = async () => {
+    setActionLoading(true)
+    setActionError("")
+    try {
+      const response = await fetch(`/api/dashboard/cases/${caseId}/abandonment/confirm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      })
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        setActionError(body.error ?? "Falha ao confirmar abandono.")
+        return
+      }
+      router.refresh()
+      window.location.reload()
+    } catch {
+      setActionError("Falha de conexão ao confirmar abandono.")
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
   const publishPreConclusion = async () => {
     setActionLoading(true)
     setActionError("")
@@ -234,6 +259,11 @@ export default function CaseInvestigationPage() {
                 Encaminhado por abandono
               </Badge>
             ) : null}
+            {caseData.abandonmentConfirmed ? (
+              <Badge className="text-xs bg-green-500/10 text-green-700 dark:text-green-300 border-green-500/20">
+                Abandono confirmado
+              </Badge>
+            ) : null}
           </div>
           <h1 className="text-xl font-bold tracking-tight">{caseData.category}</h1>
           <p className="text-sm text-muted-foreground mt-1">
@@ -260,6 +290,18 @@ export default function CaseInvestigationPage() {
           >
             Aguardar resposta
           </Button>
+          {caseData.canConfirmAbandonment ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-xs gap-1.5 border-amber-500/40"
+              disabled={actionLoading || Boolean(access?.lockedByInitialAnalysis)}
+              onClick={confirmAbandonment}
+            >
+              <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
+              Confirmar abandono
+            </Button>
+          ) : null}
           <Button
             variant="outline"
             size="sm"

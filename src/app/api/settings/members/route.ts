@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { requirePermission } from "@/lib/permissions";
 import { hashPassword } from "@/lib/auth";
 import { createImmutableAuditEvent } from "@/lib/audit";
+import { isPlausibleEmailAddress, verifyEmailForSend } from "@/lib/mail";
+import { sendMemberWelcomeNotification } from "@/lib/notifications";
 
 type CreateMemberBody = {
   name?: string;
@@ -30,7 +32,10 @@ export async function GET(request: NextRequest) {
       email: true,
       isCorporateAccount: true,
       isActive: true,
+      mustChangePassword: true,
       createdAt: true,
+      lastLoginAt: true,
+      passwordChangedAt: true,
     },
   });
 
@@ -72,6 +77,18 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  if (!isPlausibleEmailAddress(email)) {
+    return NextResponse.json({ error: "E-mail inválido ou não permitido." }, { status: 400 });
+  }
+
+  const deliverability = await verifyEmailForSend(email);
+  if (!deliverability.ok) {
+    return NextResponse.json(
+      { error: deliverability.detail ?? "E-mail não pode receber mensagens." },
+      { status: 400 },
+    );
+  }
+
   const existing = await prisma.user.findUnique({
     where: {
       tenantId_email: {
@@ -97,6 +114,7 @@ export async function POST(request: NextRequest) {
         companyRole,
         isCorporateAccount: false,
         isActive,
+        mustChangePassword: true,
       },
       select: {
         id: true,
@@ -105,7 +123,10 @@ export async function POST(request: NextRequest) {
         email: true,
         isCorporateAccount: true,
         isActive: true,
+        mustChangePassword: true,
         createdAt: true,
+        lastLoginAt: true,
+        passwordChangedAt: true,
       },
     });
 
@@ -115,6 +136,7 @@ export async function POST(request: NextRequest) {
       action: "TENANT_MEMBER_CREATED",
       payload: {
         memberId: user.id,
+        targetUserId: user.id,
         companyRole: user.companyRole,
         isActive: user.isActive,
       },
@@ -123,7 +145,27 @@ export async function POST(request: NextRequest) {
       return user;
     });
 
-    return NextResponse.json({ ok: true, member: created });
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: allowed.user.tenantId },
+      select: { name: true, code: true },
+    });
+    const appUrl = process.env.APP_BASE_URL ?? "http://localhost:3000";
+    const mail = tenant
+      ? await sendMemberWelcomeNotification({
+          to: created.email,
+          tenantName: tenant.name,
+          tenantCode: tenant.code,
+          memberName: created.name,
+          loginUrl: `${appUrl}/auth/login`,
+        })
+      : { delivered: false, blocked: [] };
+
+    return NextResponse.json({
+      ok: true,
+      member: created,
+      emailDelivered: mail.delivered,
+      emailBlocked: "blocked" in mail ? mail.blocked : [],
+    });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Não foi possível criar membro." },

@@ -26,12 +26,18 @@ const ACTION_DICTIONARY: Record<string, string> = {
     "Pessoa implicada teve recorrência reforçada durante novas interações.",
   CASE_ABANDONMENT_THRESHOLD_REACHED:
     "Caso atingiu janela de abandono sem resposta e foi encaminhado para pre-conclusão.",
+  CASE_ABANDONMENT_CONFIRMED_BY_COMMITTEE:
+    "Conselho confirmou o encaminhamento por abandono e publicou para votação.",
 
   // Participants
   CASE_PARTICIPANT_INVITED: "Pessoa envolvida/corroboradora foi convidada.",
   CASE_PARTICIPANT_QUESTIONNAIRE_CREATED: "Questionário inicial do participante foi gerado.",
   CASE_PARTICIPANT_INVITE_ACCEPTED: "Participante externo aceitou o convite individual.",
   CASE_PARTICIPANT_RESPONSE_SUBMITTED: "Resposta de participante externo registrada no processo.",
+  CASE_PARTICIPANT_FOLLOWUP_SENT: "Lembrete automático enviado a participante sem resposta.",
+  CASE_PARTICIPANT_FOLLOWUP_EXHAUSTED:
+    "Participante atingiu limite de lembretes automáticos sem responder.",
+  CASE_SLA_ALERT_NOTIFIED: "Alerta de SLA enviado ao conselho por e-mail.",
 
   // Report/portal interaction
   REPORT_ATTACHMENTS_DECLARED: "Anexos declarados e registrados no processo.",
@@ -55,6 +61,8 @@ const ACTION_DICTIONARY: Record<string, string> = {
   TENANT_PLAN_UPDATED: "Plano do tenant atualizado.",
   TENANT_MEMBER_CREATED: "Membro do tenant adicionado.",
   TENANT_MEMBER_UPDATED: "Membro do tenant atualizado.",
+  TENANT_MEMBER_PASSWORD_RESET: "Senha do membro redefinida pela conta corporativa.",
+  AUTH_PASSWORD_CHANGED: "Senha da conta alterada pelo usuário.",
   DASHBOARD_VIEWED: "Painel de casos consultado.",
   DATA_SUBJECT_REQUEST_OPENED: "Solicitação de direito LGPD aberta.",
   DATA_SUBJECT_REQUEST_STATUS_UPDATED: "Status de solicitação LGPD atualizado.",

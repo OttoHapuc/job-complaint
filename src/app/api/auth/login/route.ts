@@ -66,6 +66,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Usuário inativo. Contate o RH/Conselho." }, { status: 403 });
   }
 
+  const now = new Date();
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { lastLoginAt: now },
+  });
+
   const token = signAccessToken({
     sub: user.id,
     tenantId: user.tenantId,
@@ -83,12 +89,14 @@ export async function POST(request: NextRequest) {
       payload: {
         authMethod: "password",
         email: user.email,
+        mustChangePassword: user.mustChangePassword,
       },
     });
   });
 
   const response = NextResponse.json({
     ok: true,
+    mustChangePassword: user.mustChangePassword,
     user: {
       id: user.id,
       name: user.name,
@@ -98,6 +106,7 @@ export async function POST(request: NextRequest) {
       accountType: user.isCorporateAccount ? "CORPORATE" : "PROFESSIONAL",
       isActive: user.isActive,
       tenantName: user.tenant.name,
+      lastLoginAt: now.toISOString(),
     },
   });
   setSessionCookie(response, token);

@@ -6,6 +6,8 @@ import { enqueueOutboxAction } from "@/lib/intake/outbox";
 import { processCaseOutboxSafely } from "@/lib/intake/processor";
 import { decryptSensitiveText } from "@/lib/secure-data";
 import { createImmutableAuditEvent } from "@/lib/audit";
+import { loadCommitteeCaseContext } from "@/lib/committee-recipients";
+import { sendCommitteeVoteRequiredNotification } from "@/lib/notifications";
 
 type PublishBody = {
   publishToCommittee?: boolean;
@@ -180,6 +182,14 @@ export async function POST(
         },
       });
     });
+
+    const committee = await loadCommitteeCaseContext(allowed.user.tenantId, reportCase.id);
+    if (committee) {
+      void sendCommitteeVoteRequiredNotification({
+        ...committee,
+        origin: "investigation-publish",
+      }).catch(() => {});
+    }
   }
 
   const updated = await prisma.case.findUnique({

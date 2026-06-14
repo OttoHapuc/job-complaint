@@ -1,0 +1,22 @@
+# Lido por .agents/scripts/run-workflow.py (não é config nativa do Compozy).
+# cursor-agent usa a sessão ACP do Cursor (sem auth Codex separada).
+
+[low]
+ide = "cursor-agent"
+model = "composer-1"
+reasoning_effort = "low"
+
+[medium]
+ide = "cursor-agent"
+model = "composer-1"
+reasoning_effort = "medium"
+
+[high]
+ide = "cursor-agent"
+model = "composer-1"
+reasoning_effort = "high"
+
+[critical]
+ide = "claude"
+model = "opus"
+reasoning_effort = "high"

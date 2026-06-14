@@ -136,6 +136,16 @@ export async function GET(
   const abandonedBySilence = reportCase.auditEvents.some(
     (event) => event.action === "CASE_ABANDONMENT_THRESHOLD_REACHED",
   );
+  const abandonmentConfirmed = reportCase.auditEvents.some(
+    (event) => event.action === "CASE_ABANDONMENT_CONFIRMED_BY_COMMITTEE",
+  );
+  const canConfirmAbandonment =
+    !lockedByInitialAnalysis &&
+    abandonedBySilence &&
+    !abandonmentConfirmed &&
+    Boolean(reportCase.readyForCommitteeAt) &&
+    reportCase.status !== "AWAITING_COMMITTEE_APPROVAL" &&
+    reportCase.status !== "RESOLVED";
 
   const involvementByHash = new Map<
     string,
@@ -211,6 +221,8 @@ export async function GET(
       category: lockedByInitialAnalysis ? "Sigiloso durante análise inicial" : reportCase.category,
       status: buildStatusLabel(reportCase.status, lockedByInitialAnalysis),
       abandonedBySilence: !lockedByInitialAnalysis && abandonedBySilence,
+      abandonmentConfirmed: !lockedByInitialAnalysis && abandonmentConfirmed,
+      canConfirmAbandonment,
       risk: lockedByInitialAnalysis ? "Sigiloso" : riskLabel(reportCase.risk),
       createdAt: reportCase.createdAt.toISOString(),
       updatedAt: reportCase.updatedAt.toISOString(),

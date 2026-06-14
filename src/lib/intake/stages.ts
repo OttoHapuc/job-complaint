@@ -17,7 +17,21 @@ import {
   runInvestigationReviewIteration,
   runPreConclusionSynthesis,
 } from "@/lib/investigation/review-iteration";
-import { sendCriticalCaseNotification, sendInviteNotification } from "@/lib/notifications";
+import {
+  sendCommitteeAbandonmentPendingNotification,
+  sendCommitteeParticipantFollowupExhaustedNotification,
+  sendCommitteePreConclusionReadyNotification,
+  sendCriticalCaseNotification,
+  sendInviteNotification,
+  sendParticipantFollowupReminderNotification,
+  sendWhistleblowerAbandonmentNotification,
+  sendWhistleblowerEngagementReminderNotification,
+  sendWhistleblowerNewQuestionNotification,
+  sendWhistleblowerPreConclusionNotification,
+} from "@/lib/notifications";
+import { dedupeRecipientsByEmail, isPlausibleEmailAddress } from "@/lib/mail";
+import { loadCommitteeCaseContext } from "@/lib/committee-recipients";
+import { extractWhistleblowerEmail } from "@/lib/whistleblower-contact";
 import { decryptSensitiveText, encryptSensitiveText, hashSensitiveValue } from "@/lib/secure-data";
 import { generateInviteToken, hashInviteToken } from "@/lib/security";
 import { SECURITY_CONFIG } from "@/lib/config";
@@ -60,6 +74,65 @@ function parseRawPayload(value: Prisma.JsonValue | null): RawIntakePayload {
   return value as unknown as RawIntakePayload;
 }
 
+async function loadWhistleblowerNotifyTarget(caseId: string, rawReportId: string | null) {
+  if (!rawReportId) return null;
+  const [raw, reportCase] = await Promise.all([
+    prisma.rawReport.findUnique({
+      where: { id: rawReportId },
+      select: { intakePayload: true },
+    }),
+    prisma.case.findUnique({
+      where: { id: caseId },
+      select: {
+        externalId: true,
+        tenant: { select: { name: true } },
+      },
+    }),
+  ]);
+  if (!raw || !reportCase) return null;
+  const payload = parseRawPayload(raw.intakePayload as Prisma.JsonValue | null);
+  const email = extractWhistleblowerEmail(payload.whistleblowerContact ?? "");
+  if (!email) return null;
+  return {
+    to: email,
+    tenantName: reportCase.tenant.name,
+    caseExternalId: reportCase.externalId,
+  };
+}
+
+async function notifyWhistleblowerByEmail(
+  caseId: string,
+  rawReportId: string | null,
+  send: (target: { to: string; tenantName: string; caseExternalId: string }) => Promise<unknown>,
+) {
+  const target = await loadWhistleblowerNotifyTarget(caseId, rawReportId);
+  if (!target) return;
+  try {
+    await send(target);
+  } catch {
+    // Envio best-effort; falha não bloqueia a esteira.
+  }
+}
+
+async function notifyCommitteeByCase(
+  tenantId: string,
+  caseId: string,
+  send: (target: {
+    to: string[];
+    tenantName: string;
+    caseExternalId: string;
+    category?: string;
+  }) => Promise<unknown>,
+) {
+  const target = await loadCommitteeCaseContext(tenantId, caseId);
+  if (!target) return;
+  try {
+    await send(target);
+  } catch {
+    // Envio best-effort; falha não bloqueia a esteira.
+  }
+}
+
 function getNarrative(rawReport: { narrativeEncrypted: string }) {
   return decryptSensitiveText(rawReport.narrativeEncrypted);
 }
@@ -80,7 +153,7 @@ function toEmailSet(values: string[]) {
     new Set(
       values
         .map((value) => value.trim().toLowerCase())
-        .filter((value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)),
+        .filter((value) => isPlausibleEmailAddress(value)),
     ),
   );
 }
@@ -558,7 +631,7 @@ async function stageEvaluateReportObject(context: Context) {
   const notifiableCorroborators = corroborators.filter(
     (corroborator) =>
       typeof corroborator?.contact === "string" &&
-      /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(corroborator.contact),
+      isPlausibleEmailAddress(corroborator.contact),
   );
   const witnessEmails = toEmailSet([
     ...explicitWitnessEmails,
@@ -787,24 +860,47 @@ async function stageNotifyContacts(context: Context) {
       }>)
     : [];
 
-  for (const invite of notifyPayload) {
-    await sendInviteNotification({
+  for (const invite of dedupeRecipientsByEmail(notifyPayload)) {
+    const participant = await prisma.caseParticipant.findUnique({
+      where: { id: invite.participantId },
+      select: { inviteStatus: true },
+    });
+    if (participant?.inviteStatus === "SENT") {
+      continue;
+    }
+
+    const delivery = await sendInviteNotification({
       to: invite.email,
       tenantName: reportCase.tenant.name,
       caseExternalId: reportCase.externalId,
       inviteToken: invite.inviteToken,
     });
-    await prisma.caseParticipant.update({
-      where: { id: invite.participantId },
-      data: { inviteStatus: "SENT" },
-    });
+    if (delivery.delivered) {
+      await prisma.caseParticipant.update({
+        where: { id: invite.participantId },
+        data: { inviteStatus: "SENT" },
+      });
+      await prisma.$transaction(async (tx) => {
+        await createImmutableAuditEvent(tx, {
+          tenantId: context.tenantId,
+          caseId: context.caseId,
+          action: "CASE_PARTICIPANT_INVITED",
+          payload: {
+            participantId: invite.participantId,
+          },
+        });
+      });
+      continue;
+    }
+
     await prisma.$transaction(async (tx) => {
       await createImmutableAuditEvent(tx, {
         tenantId: context.tenantId,
         caseId: context.caseId,
-        action: "CASE_PARTICIPANT_INVITED",
+        action: "CASE_PARTICIPANT_INVITE_BLOCKED",
         payload: {
           participantId: invite.participantId,
+          blocked: delivery.blocked ?? [],
         },
       });
     });
@@ -814,8 +910,11 @@ async function stageNotifyContacts(context: Context) {
     ((reportCase.triageSummary as Record<string, unknown> | null)?.criticalReason as string) ||
     `Classificação IA com risco ${reportCase.risk}.`;
   if (reportCase.risk === "CRITICAL") {
+    const committeeEmails = [
+      ...new Set(members.map((member) => member.email.trim().toLowerCase())),
+    ];
     await sendCriticalCaseNotification({
-      to: members.map((member) => member.email),
+      to: committeeEmails,
       tenantName: reportCase.tenant.name,
       caseExternalId: reportCase.externalId,
       category: reportCase.category,
@@ -849,6 +948,22 @@ async function stageNotifyContacts(context: Context) {
       payload: {},
       idempotencyKey: `${context.caseId}:init-comms`,
     });
+
+    if (notifyPayload.length > 0) {
+      const followupDelayMs =
+        SECURITY_CONFIG.participantFollowupDays * 24 * 60 * 60 * 1000;
+      await enqueueOutboxAction(tx, {
+        tenantId: context.tenantId,
+        caseId: context.caseId,
+        rawReportId,
+        action: PipelineAction.PARTICIPANT_FOLLOWUP,
+        payload: {
+          attempt: 1,
+        },
+        availableAt: new Date(Date.now() + followupDelayMs),
+        idempotencyKey: `${context.caseId}:participant-followup:1`,
+      });
+    }
   });
 }
 
@@ -944,6 +1059,13 @@ async function stageInitCommunication(context: Context) {
       lastOutboundAt: new Date(),
     });
   });
+
+  await notifyWhistleblowerByEmail(context.caseId, rawReportId, (target) =>
+    sendWhistleblowerNewQuestionNotification({
+      ...target,
+      questionPreview: firstQuestion,
+    }),
+  );
 }
 
 async function stageReviewIteration(context: Context) {
@@ -1279,6 +1401,15 @@ async function stageReviewIteration(context: Context) {
       },
     });
   });
+
+  if (!isConclusive) {
+    await notifyWhistleblowerByEmail(context.caseId, context.rawReportId, (target) =>
+      sendWhistleblowerNewQuestionNotification({
+        ...target,
+        questionPreview: nextQuestion,
+      }),
+    );
+  }
 }
 
 async function stageEngagementTick(context: Context) {
@@ -1392,10 +1523,17 @@ async function stageEngagementTick(context: Context) {
         lastOutboundAt: new Date(),
       });
     });
+    await notifyWhistleblowerByEmail(context.caseId, context.rawReportId, (target) =>
+      sendWhistleblowerAbandonmentNotification(target),
+    );
+    await notifyCommitteeByCase(context.tenantId, context.caseId, (target) =>
+      sendCommitteeAbandonmentPendingNotification(target),
+    );
     return;
   }
 
-  const reminderMessage = reportCase.pipelineState?.pendingQuestion
+  const hasPendingQuestion = Boolean(reportCase.pipelineState?.pendingQuestion);
+  const reminderMessage = hasPendingQuestion
     ? "Seguimos analisando seu caso com cautela. Quando puder, responda a pergunta pendente para avançarmos na investigação."
     : "Seu caso segue em análise pelo Agente de Investigação. Você receberá atualização em breve.";
 
@@ -1447,6 +1585,181 @@ async function stageEngagementTick(context: Context) {
       nextContactAt: nextTickAt,
     });
   });
+
+  await notifyWhistleblowerByEmail(context.caseId, context.rawReportId, (target) =>
+    sendWhistleblowerEngagementReminderNotification({
+      ...target,
+      hasPendingQuestion,
+    }),
+  );
+}
+
+async function stageParticipantFollowup(context: Context) {
+  const attempt = Number(context.payload.attempt ?? 1);
+  const maxAttempts = SECURITY_CONFIG.participantFollowupMaxAttempts;
+  const reportCase = await prisma.case.findUnique({
+    where: { id: context.caseId },
+    select: {
+      id: true,
+      externalId: true,
+      status: true,
+      tenant: {
+        select: { name: true },
+      },
+      participants: {
+        select: {
+          id: true,
+          inviteStatus: true,
+          emailEncrypted: true,
+          responses: {
+            select: { id: true },
+            take: 1,
+          },
+        },
+      },
+    },
+  });
+  if (!reportCase) throw new Error("Caso não encontrado para follow-up de participantes.");
+  if (reportCase.status === "RESOLVED") return;
+
+  const pendingParticipants = reportCase.participants.filter(
+    (participant) =>
+      participant.responses.length === 0 &&
+      participant.inviteStatus !== "ACCEPTED",
+  );
+
+  if (pendingParticipants.length === 0) return;
+
+  const inviteExpHours = Number(process.env.INVITE_TOKEN_EXPIRES_HOURS || 72);
+  const inviteExpiresAt = new Date(Date.now() + inviteExpHours * 60 * 60 * 1000);
+  let remindersSent = 0;
+  const remindedEmails = new Set<string>();
+  let exhaustedCount = 0;
+
+  for (const participant of pendingParticipants) {
+    if (attempt > maxAttempts) {
+      exhaustedCount += 1;
+      await prisma.$transaction(async (tx) => {
+        await createImmutableAuditEvent(tx, {
+          tenantId: context.tenantId,
+          caseId: context.caseId,
+          action: "CASE_PARTICIPANT_FOLLOWUP_EXHAUSTED",
+          payload: {
+            participantId: participant.id,
+            attempt,
+            maxAttempts,
+          },
+        });
+      });
+      continue;
+    }
+
+    const profile = JSON.parse(decryptSensitiveText(participant.emailEncrypted) || "{}") as {
+      contact?: string;
+    };
+    const email = profile.contact?.trim().toLowerCase();
+    if (!email || remindedEmails.has(email)) continue;
+
+    const inviteToken = generateInviteToken();
+    await prisma.$transaction(async (tx) => {
+      await tx.caseInviteToken.updateMany({
+        where: {
+          tenantId: context.tenantId,
+          caseParticipantId: participant.id,
+          consumedAt: null,
+          revokedAt: null,
+        },
+        data: {
+          revokedAt: new Date(),
+        },
+      });
+      await tx.caseInviteToken.create({
+        data: {
+          tenantId: context.tenantId,
+          caseParticipantId: participant.id,
+          tokenHash: hashInviteToken(inviteToken),
+          expiresAt: inviteExpiresAt,
+        },
+      });
+      await createImmutableAuditEvent(tx, {
+        tenantId: context.tenantId,
+        caseId: context.caseId,
+        action: "CASE_PARTICIPANT_FOLLOWUP_PREPARED",
+        payload: {
+          participantId: participant.id,
+          attempt,
+        },
+      });
+    });
+
+    const delivery = await sendParticipantFollowupReminderNotification({
+      to: email,
+      tenantName: reportCase.tenant.name,
+      caseExternalId: reportCase.externalId,
+      inviteToken,
+      attempt,
+    });
+    if (delivery.delivered) {
+      await prisma.caseParticipant.update({
+        where: { id: participant.id },
+        data: { inviteStatus: "SENT" },
+      });
+      await prisma.$transaction(async (tx) => {
+        await createImmutableAuditEvent(tx, {
+          tenantId: context.tenantId,
+          caseId: context.caseId,
+          action: "CASE_PARTICIPANT_FOLLOWUP_SENT",
+          payload: {
+            participantId: participant.id,
+            attempt,
+          },
+        });
+      });
+      remindedEmails.add(email);
+      remindersSent += 1;
+      continue;
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await createImmutableAuditEvent(tx, {
+        tenantId: context.tenantId,
+        caseId: context.caseId,
+        action: "CASE_PARTICIPANT_INVITE_BLOCKED",
+        payload: {
+          participantId: participant.id,
+          attempt,
+          blocked: delivery.blocked ?? [],
+        },
+      });
+    });
+  }
+
+  if (attempt < maxAttempts && remindersSent > 0) {
+    const followupDelayMs =
+      SECURITY_CONFIG.participantFollowupDays * 24 * 60 * 60 * 1000;
+    await prisma.$transaction(async (tx) => {
+      await enqueueOutboxAction(tx, {
+        tenantId: context.tenantId,
+        caseId: context.caseId,
+        rawReportId: context.rawReportId,
+        action: PipelineAction.PARTICIPANT_FOLLOWUP,
+        payload: {
+          attempt: attempt + 1,
+        },
+        availableAt: new Date(Date.now() + followupDelayMs),
+        idempotencyKey: `${context.caseId}:participant-followup:${attempt + 1}`,
+      });
+    });
+  }
+
+  if (exhaustedCount > 0) {
+    await notifyCommitteeByCase(context.tenantId, context.caseId, (target) =>
+      sendCommitteeParticipantFollowupExhaustedNotification({
+        ...target,
+        exhaustedCount,
+      }),
+    );
+  }
 }
 
 async function stagePreparePreConclusion(context: Context) {
@@ -1539,6 +1852,13 @@ async function stagePreparePreConclusion(context: Context) {
       },
     });
   });
+
+  await notifyCommitteeByCase(context.tenantId, context.caseId, (target) =>
+    sendCommitteePreConclusionReadyNotification(target),
+  );
+  await notifyWhistleblowerByEmail(context.caseId, context.rawReportId, (target) =>
+    sendWhistleblowerPreConclusionNotification(target),
+  );
 }
 
 export async function handleOutboxAction(message: {
@@ -1566,6 +1886,16 @@ export async function handleOutboxAction(message: {
         tenantId: message.tenantId,
         caseId: message.caseId,
         rawReportId: null,
+        payload: (message.payload as Record<string, unknown>) || {},
+      });
+      return;
+    }
+    if (message.action === PipelineAction.PARTICIPANT_FOLLOWUP && message.caseId) {
+      await stageParticipantFollowup({
+        outboxId: message.id,
+        tenantId: message.tenantId,
+        caseId: message.caseId,
+        rawReportId: message.rawReportId,
         payload: (message.payload as Record<string, unknown>) || {},
       });
       return;
@@ -1608,6 +1938,9 @@ export async function handleOutboxAction(message: {
       return;
     case PipelineAction.ENGAGEMENT_TICK:
       await stageEngagementTick(context);
+      return;
+    case PipelineAction.PARTICIPANT_FOLLOWUP:
+      await stageParticipantFollowup(context);
       return;
     default:
       throw new Error(`Ação de pipeline não suportada: ${message.action as string}`);

@@ -4,6 +4,12 @@ import { prisma } from "@/lib/prisma";
 import { createImmutableAuditEvent } from "@/lib/audit";
 import { canVoteAsCommittee, requirePermission } from "@/lib/permissions";
 import { isCaseInInitialAnalysisWindow } from "@/lib/case-visibility";
+import { loadCommitteeCaseContext } from "@/lib/committee-recipients";
+import {
+  sendCommitteeCaseReturnedNotification,
+  sendWhistleblowerCaseResolvedNotification,
+} from "@/lib/notifications";
+import { loadWhistleblowerNotifyTargetByCaseId } from "@/lib/whistleblower-contact";
 
 type VoteBody = {
   decision?: "APPROVE" | "REJECT";
@@ -175,10 +181,25 @@ export async function POST(
         requiredVotes: requiredMembers.length,
         hasAnyReject,
         allApproved,
+        caseId: reportCase.id,
       };
     });
 
-    return NextResponse.json({ ok: true, ...result });
+    const { caseId: resolvedCaseId, ...publicResult } = result;
+
+    if (publicResult.allApproved) {
+      const whistleblower = await loadWhistleblowerNotifyTargetByCaseId(resolvedCaseId);
+      if (whistleblower) {
+        void sendWhistleblowerCaseResolvedNotification(whistleblower).catch(() => {});
+      }
+    } else if (publicResult.hasAnyReject) {
+      const committee = await loadCommitteeCaseContext(allowed.user.tenantId, resolvedCaseId);
+      if (committee) {
+        void sendCommitteeCaseReturnedNotification(committee).catch(() => {});
+      }
+    }
+
+    return NextResponse.json({ ok: true, ...publicResult });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Não foi possível registrar voto." },

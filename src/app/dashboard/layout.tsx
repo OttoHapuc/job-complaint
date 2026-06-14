@@ -9,8 +9,10 @@ import {
   Inbox,
   Settings,
   ShieldCheck,
+  Users,
   ChevronRight,
   Bell,
+  History,
   Menu,
   X,
 } from "lucide-react"
@@ -21,7 +23,9 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Visão Geral", icon: LayoutDashboard },
   { href: "/dashboard/casos", label: "Caixa de Casos", icon: Inbox, badge: 3 },
+  { href: "/dashboard/implicados", label: "Implicados", icon: Users },
   { href: "/dashboard/lgpd", label: "Solicitações LGPD", icon: ShieldCheck },
+  { href: "/dashboard/atividade", label: "Minha Atividade", icon: History },
   { href: "/dashboard/configuracoes", label: "Configurações", icon: Settings },
 ]
 
@@ -31,10 +35,14 @@ function getBreadcrumbs(pathname: string) {
   if (segments[1] === "casos") {
     crumbs.push({ label: "Caixa de Casos", href: "/dashboard/casos" })
     if (segments[2]) crumbs.push({ label: `Caso #${segments[2].toUpperCase()}`, href: `/dashboard/casos/${segments[2]}` })
+  } else if (segments[1] === "implicados") {
+    crumbs.push({ label: "Implicados", href: "/dashboard/implicados" })
   } else if (segments[1] === "configuracoes") {
     crumbs.push({ label: "Configurações", href: "/dashboard/configuracoes" })
   } else if (segments[1] === "lgpd") {
     crumbs.push({ label: "Solicitações LGPD", href: "/dashboard/lgpd" })
+  } else if (segments[1] === "atividade") {
+    crumbs.push({ label: "Minha Atividade", href: "/dashboard/atividade" })
   }
   return crumbs
 }
@@ -47,7 +55,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [userRole, setUserRole] = useState("Conselho")
   const [tenantName, setTenantName] = useState("Empresa")
   const [isCorporateAccount, setIsCorporateAccount] = useState(false)
+  const [mustChangePassword, setMustChangePassword] = useState(false)
   const breadcrumbs = getBreadcrumbs(pathname)
+
+  const isPasswordRotationRoute = pathname === "/dashboard/alterar-senha"
 
   useEffect(() => {
     const loadMe = async () => {
@@ -66,13 +77,23 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         setUserRole(data.user?.isCorporateAccount ? "Conta Corporativa" : "Conselho")
         setTenantName(data.user?.tenantName ?? "Empresa")
         setIsCorporateAccount(data.user?.isCorporateAccount === true)
+        const rotationRequired = data.user?.mustChangePassword === true
+        setMustChangePassword(rotationRequired)
+
+        if (rotationRequired && !isPasswordRotationRoute) {
+          router.replace("/dashboard/alterar-senha")
+        }
       } catch {
         router.push("/auth/login")
       }
     }
 
     void loadMe()
-  }, [router])
+  }, [router, pathname, isPasswordRotationRoute])
+
+  if (mustChangePassword || isPasswordRotationRoute) {
+    return <main className="min-h-screen bg-background">{children}</main>
+  }
 
   const logout = async () => {
     await fetch("/api/auth/logout", { method: "POST" })

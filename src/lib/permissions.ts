@@ -17,7 +17,14 @@ export type Permission =
 
 export type SessionUserWithPolicy = Pick<
   User,
-  "id" | "tenantId" | "email" | "isActive" | "companyRole" | "isCorporateAccount"
+  | "id"
+  | "tenantId"
+  | "email"
+  | "isActive"
+  | "companyRole"
+  | "isCorporateAccount"
+  | "role"
+  | "mustChangePassword"
 >;
 
 export async function getPolicyUserFromRequest(request: NextRequest) {
@@ -36,34 +43,42 @@ export async function getPolicyUserFromRequest(request: NextRequest) {
       isActive: true,
       companyRole: true,
       isCorporateAccount: true,
+      role: true,
+      mustChangePassword: true,
     },
   });
 }
 
 export function hasPermission(user: SessionUserWithPolicy, permission: Permission) {
   if (!user.isActive) return false;
-  if (permission === "tenant.admin") {
-    return user.isCorporateAccount;
-  }
-  if (user.isCorporateAccount) {
-    const CORPORATE_PERMISSIONS: Permission[] = [
-      "tenant.read_plan",
-      "tenant.manage_members",
-      "tenant.manage_plan",
-      "ops.audit_rebaseline",
-      "ops.audit_verify",
-      "tenant.admin",
-    ];
-    return CORPORATE_PERMISSIONS.includes(permission);
-  }
-  const COUNCIL_PERMISSIONS: Permission[] = [
+
+  const corporatePermissions: Permission[] = [
+    "tenant.read_plan",
+    "tenant.manage_members",
+    "tenant.manage_plan",
+    "ops.audit_rebaseline",
+    "ops.audit_verify",
+    "tenant.admin",
+  ];
+  const councilPermissions: Permission[] = [
     "case.read",
     "case.investigate",
     "case.vote_close",
     "case.resolve",
     "ops.audit_verify",
   ];
-  return COUNCIL_PERMISSIONS.includes(permission);
+
+  if (user.role === "ADMIN") {
+    return [...corporatePermissions, ...councilPermissions].includes(permission);
+  }
+
+  if (permission === "tenant.admin") {
+    return user.isCorporateAccount;
+  }
+  if (user.isCorporateAccount) {
+    return corporatePermissions.includes(permission);
+  }
+  return councilPermissions.includes(permission);
 }
 
 export function canVoteAsCommittee(user: SessionUserWithPolicy) {
@@ -79,6 +94,24 @@ export async function requirePermission(
     return {
       ok: false as const,
       response: NextResponse.json({ error: "Não autenticado." }, { status: 401 }),
+    };
+  }
+  if (!policyUser.isActive) {
+    return {
+      ok: false as const,
+      response: NextResponse.json({ error: "Usuário inativo." }, { status: 403 }),
+    };
+  }
+  if (policyUser.mustChangePassword) {
+    return {
+      ok: false as const,
+      response: NextResponse.json(
+        {
+          error: "Defina uma nova senha antes de continuar.",
+          code: "PASSWORD_CHANGE_REQUIRED",
+        },
+        { status: 403 },
+      ),
     };
   }
   if (!hasPermission(policyUser, permission)) {

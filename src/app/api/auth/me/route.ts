@@ -33,6 +33,9 @@ export async function GET(request: NextRequest) {
       isCorporateAccount: user.isCorporateAccount,
       accountType: user.isCorporateAccount ? "CORPORATE" : "PROFESSIONAL",
       isActive: user.isActive,
+      mustChangePassword: user.mustChangePassword,
+      lastLoginAt: user.lastLoginAt?.toISOString() ?? null,
+      passwordChangedAt: user.passwordChangedAt?.toISOString() ?? null,
       tenantName: user.tenant.name,
     },
   });

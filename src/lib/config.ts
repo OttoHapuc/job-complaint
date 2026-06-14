@@ -22,5 +22,7 @@ export const SECURITY_CONFIG = {
   outboxBaseRetrySeconds: parseNumber(process.env.OUTBOX_BASE_RETRY_SECONDS, 20),
   outboxDefaultBatchLimit: parseNumber(process.env.OUTBOX_DEFAULT_BATCH_LIMIT, 20),
   abandonmentWindowDays: parseNumber(process.env.ABANDONMENT_WINDOW_DAYS, 14),
+  participantFollowupDays: parseNumber(process.env.PARTICIPANT_FOLLOWUP_DAYS, 5),
+  participantFollowupMaxAttempts: parseNumber(process.env.PARTICIPANT_FOLLOWUP_MAX_ATTEMPTS, 3),
   trackingPollingMs: parseNumber(process.env.TRACKING_POLLING_MS, 15000),
 };

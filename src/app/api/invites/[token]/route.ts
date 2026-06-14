@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { hashInviteToken } from "@/lib/security";
 import { createImmutableAuditEvent } from "@/lib/audit";
+import { decryptSensitiveText } from "@/lib/secure-data";
+import { sendParticipantInviteAcceptedNotification } from "@/lib/notifications";
 
 function extractParticipantQuestions(events: Array<{ immutableData: unknown }>, participantId: string) {
   for (const event of events) {
@@ -90,6 +92,9 @@ export async function POST(
           },
         },
       },
+      tenant: {
+        select: { name: true },
+      },
     },
   });
   if (!invite) {
@@ -127,6 +132,19 @@ export async function POST(
       },
     });
   });
+
+  const profile = JSON.parse(
+    decryptSensitiveText(invite.caseParticipant.emailEncrypted) || "{}",
+  ) as { contact?: string };
+  const participantEmail = profile.contact?.trim().toLowerCase();
+  if (participantEmail) {
+    void sendParticipantInviteAcceptedNotification({
+      to: participantEmail,
+      tenantName: invite.tenant.name,
+      caseExternalId: invite.caseParticipant.case.externalId,
+      inviteToken: token,
+    }).catch(() => {});
+  }
 
   return NextResponse.json({
     ok: true,

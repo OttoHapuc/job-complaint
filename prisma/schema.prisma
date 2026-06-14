@@ -89,6 +89,7 @@ enum PipelineAction {
   PREPARE_PRE_CONCLUSION
   ENGAGEMENT_TICK
   ENTITY_REINFERENCE
+  PARTICIPANT_FOLLOWUP
 }
 
 enum OutboxStatus {
@@ -144,6 +145,25 @@ enum EngagementStepStatus {
   FAILED
 }
 
+enum EmailSuppressionReason {
+  BOUNCE
+  COMPLAINT
+  VALIDATION
+  MANUAL
+}
+
+model EmailSuppression {
+  id        String                 @id @default(cuid())
+  email     String                 @unique
+  reason    EmailSuppressionReason
+  source    String?
+  detail    String?
+  createdAt DateTime               @default(now())
+  updatedAt DateTime               @updatedAt
+
+  @@index([reason, createdAt(sort: Desc)])
+}
+
 model User {
   id          String       @id @default(cuid())
   tenantId    String
@@ -155,6 +175,9 @@ model User {
   companyRole String      @default("Membro do Conselho")
   isCorporateAccount Boolean @default(false)
   isActive    Boolean      @default(true)
+  mustChangePassword Boolean @default(false)
+  lastLoginAt DateTime?
+  passwordChangedAt DateTime?
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
   auditEvents AuditEvent[]

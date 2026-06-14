@@ -40,13 +40,13 @@ export default function LoginPage() {
         }),
       })
 
+      const data = await response.json().catch(() => ({}))
       if (!response.ok) {
-        const data = await response.json().catch(() => ({}))
         setError(data.error ?? "Falha ao autenticar.")
         return
       }
 
-      router.push(nextPath)
+      router.push(data.mustChangePassword ? "/dashboard/alterar-senha" : nextPath)
     } catch {
       setError("Não foi possível conectar ao servidor.")
     } finally {

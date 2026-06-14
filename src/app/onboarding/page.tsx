@@ -86,6 +86,10 @@ export default function OnboardingPage() {
           <p className="text-sm text-muted-foreground leading-relaxed">
             Configure sua empresa em minutos com plano inicial automático por volume de colaboradores.
           </p>
+          <p className="text-xs text-muted-foreground leading-relaxed mt-2">
+            Você pode usar o mesmo e-mail em faturamento, login corporativo e integrante profissional.
+            Nesse caso, será criada uma conta unificada com acesso a configurações e casos.
+          </p>
         </div>
 
         <form onSubmit={submit} className="space-y-6 border border-border rounded-sm bg-card p-6">
